@@ -1,0 +1,63 @@
+[
+  {
+    "id": "local-primary",
+    "role": "v2",
+    "venv": ".venv",
+    "enabled": true,
+    "dispatch": true,
+    "acceptNonTtsSteps": true,
+    "ttsModels": ["gemini-tts-flash", "gemini-tts-pro"],
+    "extraCapabilityKeys": []
+  },
+  {
+    "id": "local-image",
+    "role": "image",
+    "venv": ".venv",
+    "enabled": true,
+    "dispatch": false,
+    "acceptNonTtsSteps": false,
+    "ttsModels": [],
+    "extraCapabilityKeys": ["image"]
+  },
+  {
+    "id": "local-tts-dms-1",
+    "role": "tts",
+    "venv": ".venv-dms",
+    "enabled": true,
+    "dispatch": false,
+    "acceptNonTtsSteps": false,
+    "ttsModels": ["dms"],
+    "extraCapabilityKeys": []
+  },
+  {
+    "id": "local-tts-dms-2",
+    "role": "tts",
+    "venv": ".venv-dms",
+    "enabled": true,
+    "dispatch": false,
+    "acceptNonTtsSteps": false,
+    "ttsModels": ["dms"],
+    "extraCapabilityKeys": []
+  },
+  {
+    "id": "local-tts-dms-3",
+    "role": "tts",
+    "venv": ".venv-dms",
+    "enabled": true,
+    "dispatch": false,
+    "acceptNonTtsSteps": false,
+    "ttsModels": ["dms"],
+    "extraCapabilityKeys": []
+  },
+  {
+    "id": "local-tts-qwen",
+    "role": "tts",
+    "venv": ".venv-qwen",
+    "replicas": 7,
+    "enabled": true,
+    "dispatch": false,
+    "acceptNonTtsSteps": false,
+    "ttsModels": ["qwen3-base"],
+    "extraCapabilityKeys": []
+  }
+]

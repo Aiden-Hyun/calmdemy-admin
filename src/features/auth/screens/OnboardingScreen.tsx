@@ -1,0 +1,799 @@
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleProp,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+  ViewStyle,
+} from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
+import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import { useTheme } from "@core/providers/contexts/ThemeContext";
+import { useAuth } from "@core/providers/contexts/AuthContext";
+import {
+  PurchasesPackage,
+  useSubscription,
+} from "@core/providers/contexts/SubscriptionContext";
+import { markOnboardingSeen } from "@features/auth/utils/onboardingStorage";
+import { Theme } from "@/theme";
+
+const FREE_CONTENT_ITEMS = [
+  { icon: "leaf-outline", label: "Guided meditations" },
+  { icon: "moon-outline", label: "Sleep stories" },
+  { icon: "musical-notes-outline", label: "White noise" },
+] as const;
+
+const COURSE_ITEMS = [
+  { icon: "school-outline", label: "Structured self-help" },
+  { icon: "sparkles-outline", label: "CBT, ACT, and more" },
+  { icon: "checkmark-done-outline", label: "Practical mental tools" },
+] as const;
+
+type OnboardingDestination = "/login" | "/(tabs)/home";
+
+const pressableStyle = (
+  baseStyle: StyleProp<ViewStyle>,
+  pressedStyle?: StyleProp<ViewStyle>
+) => ({ pressed }: { pressed: boolean }) => [
+  baseStyle,
+  pressed && pressedStyle,
+];
+
+export default function OnboardingScreen() {
+  const router = useRouter();
+  const scrollRef = useRef<ScrollView>(null);
+  const { width } = useWindowDimensions();
+  const { theme, isDark } = useTheme();
+  const { user, loading: authLoading, signInAnonymously } = useAuth();
+  const {
+    currentOffering,
+    purchasePackage,
+    isLoading: subscriptionLoading,
+  } = useSubscription();
+
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [selectedPackage, setSelectedPackage] =
+    useState<PurchasesPackage | null>(null);
+  const [pendingPackage, setPendingPackage] =
+    useState<PurchasesPackage | null>(null);
+  const [isPurchasing, setIsPurchasing] = useState(false);
+  const [isPreparingGuestCheckout, setIsPreparingGuestCheckout] =
+    useState(false);
+
+  const styles = useMemo(() => createStyles(theme, isDark), [theme, isDark]);
+
+  const monthlyPackage =
+    currentOffering?.monthly ||
+    currentOffering?.availablePackages?.find(
+      (pkg) =>
+        pkg.identifier === "$rc_monthly" ||
+        pkg.identifier.toLowerCase().includes("monthly")
+    ) ||
+    null;
+
+  const annualPackage =
+    currentOffering?.annual ||
+    currentOffering?.availablePackages?.find(
+      (pkg) =>
+        pkg.identifier === "$rc_annual" ||
+        pkg.identifier.toLowerCase().includes("annual") ||
+        pkg.identifier.toLowerCase().includes("yearly")
+    ) ||
+    null;
+
+  useEffect(() => {
+    if (annualPackage) {
+      setSelectedPackage((current) => current ?? annualPackage);
+      return;
+    }
+
+    if (monthlyPackage) {
+      setSelectedPackage((current) => current ?? monthlyPackage);
+    }
+  }, [annualPackage, monthlyPackage]);
+
+  const annualSavings = useMemo(() => {
+    if (!monthlyPackage || !annualPackage) return null;
+
+    const monthlyPrice = monthlyPackage.product.price;
+    const annualPrice = annualPackage.product.price;
+    const yearlyIfMonthly = monthlyPrice * 12;
+    const savings = Math.round(
+      ((yearlyIfMonthly - annualPrice) / yearlyIfMonthly) * 100
+    );
+
+    return savings > 0 ? savings : null;
+  }, [annualPackage, monthlyPackage]);
+
+  // subscriptionLoading is intentionally excluded here — when currentOffering is
+  // absent the button is already disabled via !selectedPackage, and including
+  // subscriptionLoading caused the CTA to stay disabled after a cancelled
+  // purchase if isLoading was left true by an identity sync race.
+  const ctaBusy = isPurchasing || isPreparingGuestCheckout;
+  const isLoadingPackages = subscriptionLoading && !currentOffering;
+
+  const completeOnboarding = useCallback(
+    async (target: OnboardingDestination) => {
+      await markOnboardingSeen();
+      router.replace(target);
+    },
+    [router]
+  );
+
+  const executePurchase = useCallback(
+    async (pkg: PurchasesPackage): Promise<boolean> => {
+      setIsPurchasing(true);
+
+      try {
+        const success = await purchasePackage(pkg);
+        if (success) {
+          await completeOnboarding("/(tabs)/home");
+        }
+        return success;
+      } finally {
+        setIsPurchasing(false);
+      }
+    },
+    [completeOnboarding, purchasePackage]
+  );
+
+  useEffect(() => {
+    if (
+      !pendingPackage ||
+      authLoading ||
+      !user ||
+      subscriptionLoading ||
+      isPurchasing
+    ) {
+      return;
+    }
+
+    const pkg = pendingPackage;
+    setPendingPackage(null);
+    void executePurchase(pkg);
+  }, [
+    authLoading,
+    executePurchase,
+    isPurchasing,
+    pendingPackage,
+    subscriptionLoading,
+    user,
+  ]);
+
+  const goToPage = useCallback(
+    (index: number, animated = true) => {
+      const nextIndex = Math.max(0, Math.min(index, 2));
+      setActiveIndex(nextIndex);
+      if (nextIndex < 2) {
+        scrollRef.current?.scrollTo({
+          x: nextIndex * width,
+          animated,
+        });
+      }
+    },
+    [width]
+  );
+
+  const handleNext = useCallback(() => {
+    if (activeIndex < 2) {
+      goToPage(activeIndex + 1);
+    }
+  }, [activeIndex, goToPage]);
+
+  const handlePagerEnd = useCallback(
+    (event: {
+      nativeEvent: { contentOffset: { x: number } };
+    }) => {
+      const nextIndex = Math.round(event.nativeEvent.contentOffset.x / width);
+      setActiveIndex(Math.max(0, Math.min(nextIndex, 2)));
+    },
+    [width]
+  );
+
+  const handleSignIn = useCallback(async () => {
+    await completeOnboarding("/login");
+  }, [completeOnboarding]);
+
+  const handleSubscribe = useCallback(async () => {
+    if (!selectedPackage || isPurchasing) {
+      return;
+    }
+
+    if (!user) {
+      try {
+        setPendingPackage(selectedPackage);
+        setIsPreparingGuestCheckout(true);
+        await signInAnonymously();
+      } catch (error: any) {
+        setPendingPackage(null);
+        Alert.alert(
+          "Unable to start checkout",
+          error?.message || "Please try again in a moment."
+        );
+      } finally {
+        setIsPreparingGuestCheckout(false);
+      }
+      return;
+    }
+
+    const success = await executePurchase(selectedPackage);
+    if (!success) {
+      // User cancelled or purchase failed; ensure state is fully reset for retries
+      setPendingPackage(null);
+      setIsPreparingGuestCheckout(false);
+    }
+  }, [executePurchase, isPurchasing, selectedPackage, signInAnonymously, user]);
+
+  const renderFeatureList = (
+    items: ReadonlyArray<{
+      icon: keyof typeof Ionicons.glyphMap;
+      label: string;
+    }>
+  ) => (
+    <View style={styles.featureList}>
+      {items.map((item) => (
+        <View key={item.label} style={styles.featureRow}>
+          <View style={styles.featureIconWrap}>
+            <Ionicons name={item.icon} size={20} color={theme.colors.primary} />
+          </View>
+          <Text style={styles.featureText}>{item.label}</Text>
+        </View>
+      ))}
+    </View>
+  );
+
+  const renderPlanCard = (
+    title: string,
+    description: string,
+    pkg: PurchasesPackage | null,
+    highlight?: string
+  ) => {
+    const isSelected = selectedPackage?.identifier === pkg?.identifier;
+
+    return (
+      <Pressable
+        style={({ pressed }) => [
+          styles.planCard,
+          isSelected && styles.planCardSelected,
+          !pkg && styles.planCardDisabled,
+          pressed && pkg && styles.buttonPressed,
+        ]}
+        onPress={() => pkg && setSelectedPackage(pkg)}
+        disabled={!pkg}
+      >
+        <View style={styles.planTopRow}>
+          <View style={styles.planCopy}>
+            <Text style={styles.planTitle}>{title}</Text>
+            <Text style={styles.planPrice}>
+              {pkg ? pkg.product.priceString : "Loading..."}
+              {title === "Monthly" ? "/month" : "/year"}
+            </Text>
+            <Text style={styles.planDescription}>{description}</Text>
+          </View>
+          <View
+            style={[
+              styles.planRadio,
+              isSelected && styles.planRadioSelected,
+            ]}
+          >
+            {isSelected && <View style={styles.planRadioInner} />}
+          </View>
+        </View>
+
+        {highlight ? (
+          <View style={styles.highlightBadge}>
+            <Text style={styles.highlightText}>{highlight}</Text>
+          </View>
+        ) : null}
+      </Pressable>
+    );
+  };
+
+  const renderHeaderAction = () => {
+    if (activeIndex === 2) {
+      return (
+        <Pressable
+          onPress={handleSignIn}
+          hitSlop={8}
+          style={pressableStyle(styles.headerButton, styles.buttonPressed)}
+        >
+          <Text style={styles.headerButtonText}>Sign In</Text>
+        </Pressable>
+      );
+    }
+
+    return (
+      <Pressable
+        onPress={handleNext}
+        hitSlop={8}
+        style={pressableStyle(styles.headerButton, styles.buttonPressed)}
+      >
+        <Text style={styles.headerButtonText}>Next</Text>
+      </Pressable>
+    );
+  };
+
+  const renderSubscribePage = () => (
+    <ScrollView
+      style={styles.subscribePage}
+      contentContainerStyle={styles.subscribePageContent}
+      showsVerticalScrollIndicator={false}
+      bounces={false}
+    >
+      <LinearGradient
+        colors={
+          isDark
+            ? [theme.colors.primaryDark, theme.colors.background]
+            : [theme.colors.accentLight, theme.colors.background]
+        }
+        style={styles.heroCardCompact}
+      >
+        <View
+          style={[
+            styles.heroIconBubbleSmall,
+            { backgroundColor: theme.colors.accent },
+          ]}
+        >
+          <Ionicons name="sparkles" size={28} color="#fff" />
+        </View>
+        <Text style={styles.eyebrow}>Unlock full access</Text>
+        <Text style={styles.titleCompact}>Choose your subscription</Text>
+        <Text style={styles.bodyCompact}>
+          Subscribe for all courses and the full premium library.
+        </Text>
+      </LinearGradient>
+
+      <View style={styles.planList}>
+        {renderPlanCard("Monthly", "Flexible access", monthlyPackage)}
+        {renderPlanCard(
+          "Yearly",
+          annualSavings ? `Best value · save ${annualSavings}%` : "Best value",
+          annualPackage,
+          annualSavings ? `Save ${annualSavings}%` : "Best value"
+        )}
+      </View>
+
+      <Text style={styles.subscriptionHint}>
+        {monthlyPackage || annualPackage
+          ? "Full access includes all courses and the premium meditation, sleep, and sound library."
+          : "Subscription plans are loading. If they do not appear, use Sign In and try again from inside the app."}
+      </Text>
+
+      <Pressable
+        onPress={handleSubscribe}
+        disabled={!selectedPackage || ctaBusy}
+        style={({ pressed }) => [
+          styles.subscribeButton,
+          (!selectedPackage || ctaBusy) && styles.primaryButtonDisabled,
+          pressed && !ctaBusy && styles.buttonPressed,
+        ]}
+      >
+        {ctaBusy || isLoadingPackages ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.subscribeButtonText}>
+            Continue with Subscription
+          </Text>
+        )}
+      </Pressable>
+    </ScrollView>
+  );
+
+  return (
+    <View style={styles.safeArea}>
+      <View style={styles.header}>
+        <View style={styles.progressWrap}>
+          <Text style={styles.progressLabel}>{activeIndex + 1} / 3</Text>
+          <View style={styles.progressTrack}>
+            {[0, 1, 2].map((index) => (
+              <View
+                key={index}
+                style={[
+                  styles.progressSegment,
+                  index <= activeIndex && styles.progressSegmentActive,
+                ]}
+              />
+            ))}
+          </View>
+        </View>
+        {renderHeaderAction()}
+      </View>
+
+      {activeIndex < 2 ? (
+        <ScrollView
+          ref={scrollRef}
+          horizontal
+          pagingEnabled
+          decelerationRate="fast"
+          directionalLockEnabled
+          showsHorizontalScrollIndicator={false}
+          bounces={false}
+          onMomentumScrollEnd={handlePagerEnd}
+          scrollEventThrottle={16}
+        >
+          <View style={[styles.page, { width }]}>
+            <View style={styles.pageInner}>
+              <LinearGradient
+                colors={
+                  isDark
+                    ? [theme.colors.surface, theme.colors.background]
+                    : [theme.colors.primaryLight, theme.colors.background]
+                }
+                style={styles.heroCard}
+              >
+                <View style={styles.heroIconBubble}>
+                  <Ionicons name="leaf" size={34} color="#fff" />
+                </View>
+                <Text style={styles.eyebrow}>Start free</Text>
+                <Text style={styles.title}>Free content to begin</Text>
+                <Text style={styles.body}>
+                  Guided meditations, sleep stories, and white noise are available
+                  without a subscription.
+                </Text>
+              </LinearGradient>
+
+              {renderFeatureList(FREE_CONTENT_ITEMS)}
+
+              <View style={styles.swipeHintRow}>
+                <Ionicons
+                  name="swap-horizontal-outline"
+                  size={16}
+                  color={theme.colors.textLight}
+                />
+                <Text style={styles.swipeHintText}>Swipe to keep exploring</Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={[styles.page, { width }]}>
+            <View style={styles.pageInner}>
+              <LinearGradient
+                colors={
+                  isDark
+                    ? [theme.colors.surfaceElevated, theme.colors.background]
+                    : [theme.colors.secondaryLight, theme.colors.background]
+                }
+                style={styles.heroCard}
+              >
+                <View
+                  style={[
+                    styles.heroIconBubble,
+                    { backgroundColor: theme.colors.secondary },
+                  ]}
+                >
+                  <Ionicons name="school" size={34} color="#fff" />
+                </View>
+                <Text style={styles.eyebrow}>Go beyond meditation</Text>
+                <Text style={styles.title}>Psychology-based courses</Text>
+                <Text style={styles.body}>
+                  Explore self-help courses inspired by CBT, ACT, and other
+                  practical approaches to emotional wellbeing.
+                </Text>
+              </LinearGradient>
+
+              {renderFeatureList(COURSE_ITEMS)}
+
+              <View style={styles.swipeHintRow}>
+                <Ionicons
+                  name="swap-horizontal-outline"
+                  size={16}
+                  color={theme.colors.textLight}
+                />
+                <Text style={styles.swipeHintText}>Swipe again for plans</Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={[styles.page, { width }]} />
+        </ScrollView>
+      ) : (
+        renderSubscribePage()
+      )}
+    </View>
+  );
+}
+
+const createStyles = (theme: Theme, isDark: boolean) =>
+  StyleSheet.create({
+    safeArea: {
+      flex: 1,
+      backgroundColor: theme.colors.background,
+      paddingTop: 24,
+    },
+    header: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingHorizontal: theme.spacing.lg,
+      paddingBottom: theme.spacing.md,
+      gap: theme.spacing.md,
+    },
+    progressWrap: {
+      flex: 1,
+      gap: theme.spacing.sm,
+    },
+    progressLabel: {
+      fontFamily: theme.fonts.ui.semiBold,
+      fontSize: 13,
+      color: theme.colors.textLight,
+      letterSpacing: 0.4,
+      textTransform: "uppercase",
+    },
+    progressTrack: {
+      flexDirection: "row",
+      gap: theme.spacing.sm,
+    },
+    progressSegment: {
+      flex: 1,
+      height: 6,
+      borderRadius: 999,
+      backgroundColor: theme.colors.gray[200],
+    },
+    progressSegmentActive: {
+      backgroundColor: theme.colors.primary,
+    },
+    headerButton: {
+      minHeight: 42,
+      paddingHorizontal: theme.spacing.md,
+      borderRadius: theme.borderRadius.full,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: theme.colors.surface,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    headerButtonText: {
+      fontFamily: theme.fonts.ui.semiBold,
+      fontSize: 14,
+      color: theme.colors.text,
+    },
+    page: {
+      flex: 1,
+    },
+    pageInner: {
+      flex: 1,
+      paddingHorizontal: theme.spacing.lg,
+      paddingBottom: theme.spacing.xxl,
+      gap: theme.spacing.lg,
+    },
+    subscribePage: {
+      flex: 1,
+    },
+    subscribePageContent: {
+      paddingHorizontal: theme.spacing.lg,
+      paddingBottom: theme.spacing.xxl,
+      gap: theme.spacing.lg,
+    },
+    heroCard: {
+      borderRadius: theme.borderRadius.xxl,
+      paddingHorizontal: theme.spacing.lg,
+      paddingVertical: theme.spacing.xxl,
+      minHeight: 280,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 1,
+      borderColor: isDark ? theme.colors.border : `${theme.colors.primary}20`,
+    },
+    heroCardCompact: {
+      borderRadius: theme.borderRadius.xxl,
+      paddingHorizontal: theme.spacing.lg,
+      paddingVertical: theme.spacing.xl,
+      alignItems: "center",
+      borderWidth: 1,
+      borderColor: isDark ? theme.colors.border : `${theme.colors.primary}20`,
+    },
+    heroIconBubble: {
+      width: 76,
+      height: 76,
+      borderRadius: 38,
+      backgroundColor: theme.colors.primary,
+      alignItems: "center",
+      justifyContent: "center",
+      marginBottom: theme.spacing.lg,
+      ...theme.shadows.md,
+    },
+    heroIconBubbleSmall: {
+      width: 60,
+      height: 60,
+      borderRadius: 30,
+      alignItems: "center",
+      justifyContent: "center",
+      marginBottom: theme.spacing.md,
+      ...theme.shadows.sm,
+    },
+    eyebrow: {
+      fontFamily: theme.fonts.ui.semiBold,
+      fontSize: 12,
+      letterSpacing: 1.2,
+      textTransform: "uppercase",
+      color: theme.colors.textLight,
+      marginBottom: theme.spacing.sm,
+    },
+    title: {
+      fontFamily: theme.fonts.display.bold,
+      fontSize: 32,
+      lineHeight: 38,
+      color: theme.colors.text,
+      textAlign: "center",
+      marginBottom: theme.spacing.md,
+    },
+    titleCompact: {
+      fontFamily: theme.fonts.display.bold,
+      fontSize: 28,
+      lineHeight: 34,
+      color: theme.colors.text,
+      textAlign: "center",
+      marginBottom: theme.spacing.sm,
+    },
+    body: {
+      fontFamily: theme.fonts.body.regular,
+      fontSize: 16,
+      lineHeight: 25,
+      color: theme.colors.textLight,
+      textAlign: "center",
+      maxWidth: 320,
+    },
+    bodyCompact: {
+      fontFamily: theme.fonts.body.regular,
+      fontSize: 15,
+      lineHeight: 23,
+      color: theme.colors.textLight,
+      textAlign: "center",
+      maxWidth: 320,
+    },
+    featureList: {
+      gap: theme.spacing.md,
+    },
+    featureRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: theme.spacing.md,
+      padding: theme.spacing.md,
+      borderRadius: theme.borderRadius.xl,
+      backgroundColor: theme.colors.surface,
+      ...theme.shadows.sm,
+    },
+    featureIconWrap: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: `${theme.colors.primary}15`,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    featureText: {
+      flex: 1,
+      fontFamily: theme.fonts.ui.medium,
+      fontSize: 15,
+      color: theme.colors.text,
+    },
+    swipeHintRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: theme.spacing.sm,
+      marginTop: "auto",
+      paddingTop: theme.spacing.md,
+    },
+    swipeHintText: {
+      fontFamily: theme.fonts.ui.medium,
+      fontSize: 14,
+      color: theme.colors.textLight,
+    },
+    planList: {
+      gap: theme.spacing.md,
+    },
+    planCard: {
+      borderRadius: theme.borderRadius.xl,
+      padding: theme.spacing.lg,
+      backgroundColor: theme.colors.surface,
+      borderWidth: 1.5,
+      borderColor: theme.colors.border,
+      ...theme.shadows.sm,
+    },
+    planCardSelected: {
+      borderColor: theme.colors.primary,
+      backgroundColor: isDark ? theme.colors.surfaceElevated : "#FFFFFF",
+    },
+    planCardDisabled: {
+      opacity: 0.7,
+    },
+    planTopRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      gap: theme.spacing.md,
+    },
+    planCopy: {
+      flex: 1,
+    },
+    planTitle: {
+      fontFamily: theme.fonts.ui.semiBold,
+      fontSize: 18,
+      color: theme.colors.text,
+      marginBottom: 6,
+    },
+    planPrice: {
+      fontFamily: theme.fonts.display.semiBold,
+      fontSize: 24,
+      color: theme.colors.text,
+      marginBottom: 6,
+    },
+    planDescription: {
+      fontFamily: theme.fonts.ui.regular,
+      fontSize: 14,
+      color: theme.colors.textLight,
+    },
+    planRadio: {
+      width: 24,
+      height: 24,
+      borderRadius: 12,
+      borderWidth: 2,
+      borderColor: theme.colors.border,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    planRadioSelected: {
+      borderColor: theme.colors.primary,
+    },
+    planRadioInner: {
+      width: 10,
+      height: 10,
+      borderRadius: 5,
+      backgroundColor: theme.colors.primary,
+    },
+    highlightBadge: {
+      alignSelf: "flex-start",
+      marginTop: theme.spacing.md,
+      paddingHorizontal: theme.spacing.sm,
+      paddingVertical: 6,
+      borderRadius: theme.borderRadius.full,
+      backgroundColor: `${theme.colors.primary}16`,
+    },
+    highlightText: {
+      fontFamily: theme.fonts.ui.semiBold,
+      fontSize: 12,
+      color: theme.colors.primaryDark,
+    },
+    subscriptionHint: {
+      fontFamily: theme.fonts.ui.regular,
+      fontSize: 13,
+      lineHeight: 20,
+      color: theme.colors.textLight,
+      textAlign: "center",
+    },
+    subscribeButton: {
+      minHeight: 56,
+      borderRadius: theme.borderRadius.full,
+      backgroundColor: theme.colors.primary,
+      alignItems: "center",
+      justifyContent: "center",
+      paddingHorizontal: theme.spacing.lg,
+      marginTop: theme.spacing.sm,
+      ...theme.shadows.md,
+    },
+    subscribeButtonText: {
+      fontFamily: theme.fonts.ui.semiBold,
+      fontSize: 16,
+      color: theme.colors.textOnPrimary,
+    },
+    primaryButtonDisabled: {
+      opacity: 0.5,
+    },
+    buttonPressed: {
+      opacity: 0.9,
+      transform: [{ scale: 0.98 }],
+    },
+  });

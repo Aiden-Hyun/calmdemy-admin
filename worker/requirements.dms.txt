@@ -1,0 +1,25 @@
+# Firebase / Google Cloud
+firebase-admin==6.*
+google-cloud-compute==1.*
+google-cloud-storage==2.*
+
+# Google Gemini API (kept for shared adapters)
+google-genai>=1.0
+
+# Core ML runtime
+torch>=2.6
+torchaudio
+accelerate==1.*
+
+# Kyutai DMS TTS
+moshi==0.2.11
+sphn
+numpy
+huggingface_hub>=0.24,<0.34
+
+# Audio processing
+pydub==0.25.*
+mutagen==1.*
+
+# Utilities
+python-dotenv==1.*

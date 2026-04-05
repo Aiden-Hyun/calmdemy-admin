@@ -1,0 +1,1325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Eval Review</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600&family=Lora:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous"></script>
+  <style>
+    :root {
+      --bg: #faf9f5;
+      --surface: #ffffff;
+      --border: #e8e6dc;
+      --text: #141413;
+      --text-muted: #b0aea5;
+      --accent: #d97757;
+      --accent-hover: #c4613f;
+      --green: #788c5d;
+      --green-bg: #eef2e8;
+      --red: #c44;
+      --red-bg: #fceaea;
+      --header-bg: #141413;
+      --header-text: #faf9f5;
+      --radius: 6px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Lora', Georgia, serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ---- Header ---- */
+    .header {
+      background: var(--header-bg);
+      color: var(--header-text);
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .header h1 {
+      font-family: 'Poppins', sans-serif;
+      font-size: 1.25rem;
+      font-weight: 600;
+    }
+    .header .instructions {
+      font-size: 0.8rem;
+      opacity: 0.7;
+      margin-top: 0.25rem;
+    }
+    .header .progress {
+      font-size: 0.875rem;
+      opacity: 0.8;
+      text-align: right;
+    }
+
+    /* ---- Main content ---- */
+    .main {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.5rem 2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    /* ---- Sections ---- */
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      flex-shrink: 0;
+    }
+    .section-header {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.75rem 1rem;
+      font-size: 0.75rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+    }
+    .section-body {
+      padding: 1rem;
+    }
+
+    /* ---- Config badge ---- */
+    .config-badge {
+      display: inline-block;
+      padding: 0.2rem 0.625rem;
+      border-radius: 9999px;
+      font-family: 'Poppins', sans-serif;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      margin-left: 0.75rem;
+      vertical-align: middle;
+    }
+    .config-badge.config-primary {
+      background: rgba(33, 150, 243, 0.12);
+      color: #1976d2;
+    }
+    .config-badge.config-baseline {
+      background: rgba(255, 193, 7, 0.15);
+      color: #f57f17;
+    }
+
+    /* ---- Prompt ---- */
+    .prompt-text {
+      white-space: pre-wrap;
+      font-size: 0.9375rem;
+      line-height: 1.6;
+    }
+
+    /* ---- Outputs ---- */
+    .output-file {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .output-file + .output-file {
+      margin-top: 1rem;
+    }
+    .output-file-header {
+      padding: 0.5rem 0.75rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .output-file-header .dl-btn {
+      font-size: 0.7rem;
+      color: var(--accent);
+      text-decoration: none;
+      cursor: pointer;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-weight: 500;
+      opacity: 0.8;
+    }
+    .output-file-header .dl-btn:hover {
+      opacity: 1;
+      text-decoration: underline;
+    }
+    .output-file-content {
+      padding: 0.75rem;
+      overflow-x: auto;
+    }
+    .output-file-content pre {
+      font-size: 0.8125rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+    }
+    .output-file-content img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 4px;
+    }
+    .output-file-content iframe {
+      width: 100%;
+      height: 600px;
+      border: none;
+    }
+    .output-file-content table {
+      border-collapse: collapse;
+      font-size: 0.8125rem;
+      width: 100%;
+    }
+    .output-file-content table td,
+    .output-file-content table th {
+      border: 1px solid var(--border);
+      padding: 0.375rem 0.5rem;
+      text-align: left;
+    }
+    .output-file-content table th {
+      background: var(--bg);
+      font-weight: 600;
+    }
+    .output-file-content .download-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.875rem;
+      cursor: pointer;
+    }
+    .output-file-content .download-link:hover {
+      background: var(--border);
+    }
+    .empty-state {
+      color: var(--text-muted);
+      font-style: italic;
+      padding: 2rem;
+      text-align: center;
+    }
+
+    /* ---- Feedback ---- */
+    .prev-feedback {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.625rem 0.75rem;
+      margin-top: 0.75rem;
+      font-size: 0.8125rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+    .prev-feedback-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 0.25rem;
+      color: var(--text-muted);
+    }
+    .feedback-textarea {
+      width: 100%;
+      min-height: 100px;
+      padding: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 0.9375rem;
+      line-height: 1.5;
+      resize: vertical;
+      color: var(--text);
+    }
+    .feedback-textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+    }
+    .feedback-status {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.5rem;
+      min-height: 1.1em;
+    }
+
+    /* ---- Grades (collapsible) ---- */
+    .grades-toggle {
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+      user-select: none;
+    }
+    .grades-toggle:hover {
+      color: var(--accent);
+    }
+    .grades-toggle .arrow {
+      margin-right: 0.5rem;
+      transition: transform 0.15s;
+      font-size: 0.75rem;
+    }
+    .grades-toggle .arrow.open {
+      transform: rotate(90deg);
+    }
+    .grades-content {
+      display: none;
+      margin-top: 0.75rem;
+    }
+    .grades-content.open {
+      display: block;
+    }
+    .grades-summary {
+      font-size: 0.875rem;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .grade-badge {
+      display: inline-block;
+      padding: 0.125rem 0.5rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .grade-pass { background: var(--green-bg); color: var(--green); }
+    .grade-fail { background: var(--red-bg); color: var(--red); }
+    .assertion-list {
+      list-style: none;
+    }
+    .assertion-item {
+      padding: 0.625rem 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8125rem;
+    }
+    .assertion-item:last-child { border-bottom: none; }
+    .assertion-status {
+      font-weight: 600;
+      margin-right: 0.5rem;
+    }
+    .assertion-status.pass { color: var(--green); }
+    .assertion-status.fail { color: var(--red); }
+    .assertion-evidence {
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      margin-top: 0.25rem;
+      padding-left: 1.5rem;
+    }
+
+    /* ---- View tabs ---- */
+    .view-tabs {
+      display: flex;
+      gap: 0;
+      padding: 0 2rem;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .view-tab {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.625rem 1.25rem;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      background: none;
+      color: var(--text-muted);
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
+    }
+    .view-tab:hover { color: var(--text); }
+    .view-tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    .view-panel { display: none; }
+    .view-panel.active { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+
+    /* ---- Benchmark view ---- */
+    .benchmark-view {
+      padding: 1.5rem 2rem;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .benchmark-table {
+      border-collapse: collapse;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 0.8125rem;
+      width: 100%;
+      margin-bottom: 1.5rem;
+    }
+    .benchmark-table th, .benchmark-table td {
+      padding: 0.625rem 0.75rem;
+      text-align: left;
+      border: 1px solid var(--border);
+    }
+    .benchmark-table th {
+      font-family: 'Poppins', sans-serif;
+      background: var(--header-bg);
+      color: var(--header-text);
+      font-weight: 500;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .benchmark-table tr:hover { background: var(--bg); }
+    .benchmark-table tr.benchmark-row-with { background: rgba(33, 150, 243, 0.06); }
+    .benchmark-table tr.benchmark-row-without { background: rgba(255, 193, 7, 0.06); }
+    .benchmark-table tr.benchmark-row-with:hover { background: rgba(33, 150, 243, 0.12); }
+    .benchmark-table tr.benchmark-row-without:hover { background: rgba(255, 193, 7, 0.12); }
+    .benchmark-table tr.benchmark-row-avg { font-weight: 600; border-top: 2px solid var(--border); }
+    .benchmark-table tr.benchmark-row-avg.benchmark-row-with { background: rgba(33, 150, 243, 0.12); }
+    .benchmark-table tr.benchmark-row-avg.benchmark-row-without { background: rgba(255, 193, 7, 0.12); }
+    .benchmark-delta-positive { color: var(--green); font-weight: 600; }
+    .benchmark-delta-negative { color: var(--red); font-weight: 600; }
+    .benchmark-notes {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+    }
+    .benchmark-notes h3 {
+      font-family: 'Poppins', sans-serif;
+      font-size: 0.875rem;
+      margin-bottom: 0.75rem;
+    }
+    .benchmark-notes ul {
+      list-style: disc;
+      padding-left: 1.25rem;
+    }
+    .benchmark-notes li {
+      font-size: 0.8125rem;
+      line-height: 1.6;
+      margin-bottom: 0.375rem;
+    }
+    .benchmark-empty {
+      color: var(--text-muted);
+      font-style: italic;
+      text-align: center;
+      padding: 3rem;
+    }
+
+    /* ---- Navigation ---- */
+    .nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1rem 2rem;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+    .nav-btn {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.5rem 1.25rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--text);
+      transition: all 0.15s;
+    }
+    .nav-btn:hover:not(:disabled) {
+      background: var(--bg);
+      border-color: var(--text-muted);
+    }
+    .nav-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .done-btn {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.5rem 1.5rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 500;
+      transition: all 0.15s;
+    }
+    .done-btn:hover {
+      background: var(--bg);
+      border-color: var(--text-muted);
+    }
+    .done-btn.ready {
+      border: none;
+      background: var(--accent);
+      color: white;
+      font-weight: 600;
+    }
+    .done-btn.ready:hover {
+      background: var(--accent-hover);
+    }
+    /* ---- Done overlay ---- */
+    .done-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+    }
+    .done-overlay.visible {
+      display: flex;
+    }
+    .done-card {
+      background: var(--surface);
+      border-radius: 12px;
+      padding: 2rem 3rem;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      max-width: 500px;
+    }
+    .done-card h2 {
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .done-card p {
+      color: var(--text-muted);
+      margin-bottom: 1.5rem;
+      line-height: 1.5;
+    }
+    .done-card .btn-row {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: center;
+    }
+    .done-card button {
+      padding: 0.5rem 1.25rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      cursor: pointer;
+      font-size: 0.875rem;
+    }
+    .done-card button:hover {
+      background: var(--bg);
+    }
+    /* ---- Toast ---- */
+    .toast {
+      position: fixed;
+      bottom: 5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--header-bg);
+      color: var(--header-text);
+      padding: 0.625rem 1.25rem;
+      border-radius: var(--radius);
+      font-size: 0.875rem;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+      z-index: 200;
+    }
+    .toast.visible {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div id="app" style="height:100vh; display:flex; flex-direction:column;">
+    <div class="header">
+      <div>
+        <h1>Eval Review: <span id="skill-name"></span></h1>
+        <div class="instructions">Review each output and leave feedback below. Navigate with arrow keys or buttons. When done, copy feedback and paste into Claude Code.</div>
+      </div>
+      <div class="progress" id="progress"></div>
+    </div>
+
+    <!-- View tabs (only shown when benchmark data exists) -->
+    <div class="view-tabs" id="view-tabs" style="display:none;">
+      <button class="view-tab active" onclick="switchView('outputs')">Outputs</button>
+      <button class="view-tab" onclick="switchView('benchmark')">Benchmark</button>
+    </div>
+
+    <!-- Outputs panel (qualitative review) -->
+    <div class="view-panel active" id="panel-outputs">
+    <div class="main">
+      <!-- Prompt -->
+      <div class="section">
+        <div class="section-header">Prompt <span class="config-badge" id="config-badge" style="display:none;"></span></div>
+        <div class="section-body">
+          <div class="prompt-text" id="prompt-text"></div>
+        </div>
+      </div>
+
+      <!-- Outputs -->
+      <div class="section">
+        <div class="section-header">Output</div>
+        <div class="section-body" id="outputs-body">
+          <div class="empty-state">No output files found</div>
+        </div>
+      </div>
+
+      <!-- Previous Output (collapsible) -->
+      <div class="section" id="prev-outputs-section" style="display:none;">
+        <div class="section-header">
+          <div class="grades-toggle" onclick="togglePrevOutputs()">
+            <span class="arrow" id="prev-outputs-arrow">&#9654;</span>
+            Previous Output
+          </div>
+        </div>
+        <div class="grades-content" id="prev-outputs-content"></div>
+      </div>
+
+      <!-- Grades (collapsible) -->
+      <div class="section" id="grades-section" style="display:none;">
+        <div class="section-header">
+          <div class="grades-toggle" onclick="toggleGrades()">
+            <span class="arrow" id="grades-arrow">&#9654;</span>
+            Formal Grades
+          </div>
+        </div>
+        <div class="grades-content" id="grades-content"></div>
+      </div>
+
+      <!-- Feedback -->
+      <div class="section">
+        <div class="section-header">Your Feedback</div>
+        <div class="section-body">
+          <textarea
+            class="feedback-textarea"
+            id="feedback"
+            placeholder="What do you think of this output? Any issues, suggestions, or things that look great?"
+          ></textarea>
+          <div class="feedback-status" id="feedback-status"></div>
+          <div class="prev-feedback" id="prev-feedback" style="display:none;">
+            <div class="prev-feedback-label">Previous feedback</div>
+            <div id="prev-feedback-text"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="nav" id="outputs-nav">
+      <button class="nav-btn" id="prev-btn" onclick="navigate(-1)">&#8592; Previous</button>
+      <button class="done-btn" id="done-btn" onclick="showDoneDialog()">Submit All Reviews</button>
+      <button class="nav-btn" id="next-btn" onclick="navigate(1)">Next &#8594;</button>
+    </div>
+    </div><!-- end panel-outputs -->
+
+    <!-- Benchmark panel (quantitative stats) -->
+    <div class="view-panel" id="panel-benchmark">
+      <div class="benchmark-view" id="benchmark-content">
+        <div class="benchmark-empty">No benchmark data available. Run a benchmark to see quantitative results here.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Done overlay -->
+  <div class="done-overlay" id="done-overlay">
+    <div class="done-card">
+      <h2>Review Complete</h2>
+      <p>Your feedback has been saved. Go back to your Claude Code session and tell Claude you're done reviewing.</p>
+      <div class="btn-row">
+        <button onclick="closeDoneDialog()">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // ---- Embedded data (injected by generate_review.py) ----
+    const EMBEDDED_DATA = {"skill_name": "comment-writer", "runs": [{"id": "eval-0-authcontext-with_skill", "prompt": "Hey, can you add comments to the AuthContext.tsx file? It's in src/core/providers/contexts/AuthContext.tsx. I'm a new junior dev and I want to understand how auth works in this app.", "eval_id": 0, "outputs": [{"name": "AuthContext.tsx", "type": "text", "content": "import React, {\n  createContext,\n  useCallback,\n  useContext,\n  useEffect,\n  useMemo,\n  useState,\n} from \"react\";\nimport { Platform } from \"react-native\";\nimport { User, onAuthStateChanged } from \"firebase/auth\";\nimport { GoogleSignin } from \"@react-native-google-signin/google-signin\";\nimport * as AppleAuthentication from \"expo-apple-authentication\";\nimport { auth } from \"@/firebase\";\nimport { env } from \"@core/config/env\";\nimport {\n  AuthContextType,\n  CredentialCollisionError,\n} from \"@core/providers/contexts/auth/types\";\nimport { createCredentialActions } from \"@core/providers/contexts/auth/actions/credentialActions\";\nimport { createSessionActions } from \"@core/providers/contexts/auth/actions/sessionActions\";\nimport { createAccountActions } from \"@core/providers/contexts/auth/actions/accountActions\";\n\nexport { CredentialCollisionError } from \"@core/providers/contexts/auth/types\";\n\n/**\n * ============================================================\n * AuthContext.tsx \u2014 Authentication Provider (Provider Pattern)\n * ============================================================\n *\n * Architectural Role:\n *   This module implements the Provider pattern to supply authentication\n *   state and actions to the entire component tree via React Context.\n *   It sits in the \"core/providers\" layer \u2014 a cross-cutting concern that\n *   every feature module depends on but none owns. The AuthProvider wraps\n *   the root of the app and makes the useAuth() hook available throughout.\n *\n * Design Patterns:\n *   - Provider Pattern (React Context): Centralizes auth state and exposes it\n *     through a context consumer hook (useAuth), eliminating prop drilling.\n *   - Factory Method: createCredentialActions / createSessionActions /\n *     createAccountActions decompose auth logic into cohesive action groups,\n *     each constructed with only the dependencies it needs via closures\n *     (Dependency Injection).\n *   - Observer Pattern: onAuthStateChanged subscribes to Firebase's auth state\n *     stream \u2014 the component re-renders reactively when the observed subject\n *     (Firebase Auth instance) emits a new authentication state change.\n *   - Facade Pattern: The context value exposes a unified interface that hides\n *     the complexity of three separate action factories and two Firebase APIs\n *     (Firebase Auth + Google Sign-In + Apple Authentication).\n *\n * Key Dependencies:\n *   - firebase/auth: Identity provider (sign-in, sign-up, credential linking)\n *   - @react-native-google-signin: OAuth credential acquisition for Google\n *   - expo-apple-authentication: Apple Sign-In flow on iOS\n *\n * Consumed By:\n *   Every screen, ViewModel hook, and feature that checks login state or\n *   triggers auth flows, via the useAuth() hook.\n *\n * Data Flow:\n *   Firebase Auth (source of truth) \u2192 onAuthStateChanged listener \u2192 setUser\n *   \u2192 AuthContext value \u2192 useAuth hook \u2192 components\n * ============================================================\n */\n\n// --- Module initialization: Configure Google Sign-In at app startup ---\n//\n// GoogleSignin is a singleton that manages the Google OAuth flow. It must be\n// configured once with the app's OAuth client IDs before any sign-in attempt.\n// We configure it here at module load time (not in a useEffect) so that by the\n// time any component calls useAuth().signInWithGoogle, GoogleSignin is ready.\n// This is a common pattern for initializing third-party SDKs at app startup.\nconsole.log('[Startup] AuthContext module loaded \u2014 configuring GoogleSignin');\nif (!env.google.webClientId && !env.google.iosClientId) {\n  console.warn(\"[Startup] Google Sign-In client IDs missing; check environment variables\");\n}\ntry {\n  GoogleSignin.configure({\n    webClientId: env.google.webClientId,\n    iosClientId: env.google.iosClientId,\n  });\n  console.log('[Startup] GoogleSignin.configure() succeeded');\n} catch (e) {\n  console.error('[Startup] GoogleSignin.configure() threw:', e);\n}\n\n// Context object that holds the auth state and methods. This is the \"store\"\n// that all consumers will subscribe to via the useAuth hook.\nconst AuthContext = createContext<AuthContextType | undefined>(undefined);\n\n/**\n * AuthProvider \u2014 Root context provider for authentication.\n *\n * This component should wrap the entire app (or at least the root navigation\n * tree). It establishes Firebase Auth subscription on mount and maintains\n * three pieces of state: the authenticated user, a loading flag while auth\n * initializes, and a platform-specific flag for Apple Sign-In availability.\n *\n * The component exports a unified interface (AuthContextType) that encapsulates\n * all auth operations (sign-in, sign-up, linking, etc.) into discrete action\n * methods, hiding the implementation complexity from consumers.\n *\n * @param children - React elements that will have access to useAuth()\n */\nexport function AuthProvider({ children }: { children: React.ReactNode }) {\n  console.log('[Startup] AuthProvider rendering');\n\n  // --- State: User and loading indicator ---\n  const [user, setUser] = useState<User | null>(null);\n  const [loading, setLoading] = useState(true);\n\n  // --- State: Platform-specific Apple Sign-In availability ---\n  // On iOS, AppleAuthentication.isAvailableAsync() probes whether the OS supports\n  // Apple Sign-In. On Android and web, this flag stays false. We store this\n  // as state so downstream components can conditionally render the Apple button.\n  const [isAppleSignInAvailable, setIsAppleSignInAvailable] = useState(false);\n\n  /**\n   * Effect 1: Probe Apple Sign-In availability on iOS.\n   *\n   * This leverages platform-specific capability detection (the Capability Detection\n   * pattern). On iOS, we ask the OS if Apple Sign-In is available; on other platforms,\n   * the flag remains false. The isMounted flag prevents state updates on an unmounted\n   * component \u2014 a classic race-condition guard for async operations that may resolve\n   * after the user navigates away from the app.\n   *\n   * Dependency array: [] \u2014 runs once on mount only.\n   */\n  useEffect(() => {\n    console.log('[Startup] AuthProvider mounted \u2014 checking Apple auth availability');\n    let isMounted = true;\n\n    if (Platform.OS === \"ios\") {\n      AppleAuthentication.isAvailableAsync()\n        .then((available) => {\n          console.log('[Startup] Apple auth available:', available);\n          // Cleanup: only update state if the component is still mounted.\n          // If the user navigates away during this async check, we skip the setState\n          // to avoid a memory leak warning.\n          if (isMounted) {\n            setIsAppleSignInAvailable(available);\n          }\n        })\n        .catch((e) => {\n          console.warn('[Startup] Apple auth availability check failed:', e);\n          if (isMounted) {\n            setIsAppleSignInAvailable(false);\n          }\n        });\n    }\n\n    // Cleanup function: mark the component as unmounted so the promise callback\n    // above won't try to setState.\n    return () => {\n      isMounted = false;\n    };\n  }, []);\n\n  /**\n   * Effect 2: Subscribe to Firebase authentication state changes.\n   *\n   * This implements the Observer pattern \u2014 we subscribe to Firebase's auth state\n   * stream via onAuthStateChanged(). Every time the user signs in, signs out, or\n   * their token refreshes, the callback fires. We update local state, which triggers\n   * a re-render, and consumers see the new user via useAuth().\n   *\n   * The returned unsubscribe function is our cleanup callback; React calls it on\n   * unmount so we don't leak memory by leaving the listener attached.\n   *\n   * Dependency array: [] \u2014 runs once on mount only. The Firebase instance (auth)\n   * is a singleton, so we don't need it in deps.\n   */\n  useEffect(() => {\n    console.log('[Startup] Subscribing to Firebase onAuthStateChanged');\n    try {\n      const unsubscribe = onAuthStateChanged(auth, (nextUser) => {\n        console.log('[Startup] onAuthStateChanged fired \u2014 user:', nextUser ? nextUser.uid : 'null');\n        setUser(nextUser);\n        setLoading(false);\n      });\n      console.log('[Startup] Firebase auth subscription active');\n      return unsubscribe;\n    } catch (e) {\n      console.error('[Startup] onAuthStateChanged threw:', e);\n      setLoading(false);\n    }\n  }, []);\n\n  /**\n   * Helper: requireAuthenticatedUser \u2014 Guard clause for auth checks.\n   *\n   * Many auth actions (like linkProvider or changeEmail) only make sense for\n   * a logged-in user. This helper throws if no user is present, making it safe\n   * for downstream code to assume a non-null user. This is the Gatekeeper pattern \u2014\n   * a single checkpoint that validates a precondition.\n   *\n   * Memoized with useCallback to preserve referential equality across re-renders,\n   * so we can safely include it in other hooks' dependency arrays without causing\n   * unnecessary recalculations.\n   *\n   * @returns The current User, guaranteed non-null\n   * @throws If no user is logged in\n   */\n  const requireAuthenticatedUser = useCallback((): User => {\n    if (!user) {\n      throw new Error(\"No user is currently signed in\");\n    }\n    return user;\n  }, [user]);\n\n  /**\n   * Helper: requireAnonymousUser \u2014 Guard clause for anonymous-only operations.\n   *\n   * Anonymous sign-in is a special mode where the user has an account but hasn't\n   * yet provided credentials (email, Google, Apple, etc.). Some flows (like upgrading\n   * to a full account) only apply to anonymous users. This helper enforces that\n   * precondition, again using the Gatekeeper pattern.\n   *\n   * @returns The current User, if they are anonymous\n   * @throws If no user is logged in or the user is not anonymous\n   */\n  const requireAnonymousUser = useCallback((): User => {\n    const currentUser = requireAuthenticatedUser();\n    if (!currentUser.isAnonymous) {\n      throw new Error(\"User is not anonymous\");\n    }\n    return currentUser;\n  }, [requireAuthenticatedUser]);\n\n  /**\n   * Helper: getCurrentUser \u2014 Fetch the current authenticated user.\n   *\n   * A simple accessor that returns the current user (may be null). Used by\n   * downstream factories to pass into accountActions so they can resolve the\n   * current user at the time an action is called, not at the time the factory\n   * is constructed.\n   *\n   * Memoized to preserve reference equality.\n   *\n   * @returns The current user, or null if not logged in\n   */\n  const getCurrentUser = useCallback(() => user, [user]);\n\n  /**\n   * Factory: credentialActions \u2014 Constructs auth credential-handling methods.\n   *\n   * This leverages the Factory Method pattern. The createCredentialActions function\n   * is passed three dependencies (platform availability, guard clauses) and returns\n   * an object with methods like getGoogleCredential(), linkAnonymousAccount(), etc.\n   * By encapsulating credential logic in a factory, we keep the provider focused\n   * and allow the actual credential code to live in a separate module\n   * (credentialActions.ts), following Separation of Concerns.\n   *\n   * Wrapped in useMemo to cache the result across re-renders. The dependency array\n   * lists all external values the factory closes over; if any changes, we reconstruct\n   * the actions object. This is textbook Dependency Injection via closures.\n   *\n   * Dependencies:\n   *   - isAppleSignInAvailable: Tells credential fetchers whether Apple Sign-In\n   *     is available on this platform.\n   *   - requireAuthenticatedUser / requireAnonymousUser: Guards for specific\n   *     sign-in flows.\n   */\n  const credentialActions = useMemo(\n    () =>\n      createCredentialActions({\n        isAppleSignInAvailable,\n        requireAuthenticatedUser,\n        requireAnonymousUser,\n      }),\n    [isAppleSignInAvailable, requireAuthenticatedUser, requireAnonymousUser]\n  );\n\n  /**\n   * Factory: sessionActions \u2014 Constructs session-level auth methods.\n   *\n   * Session actions (sign-in, sign-up, logout) are simpler than credential\n   * actions \u2014 they delegate credential acquisition to credentialActions and\n   * then call Firebase's signInWithCredential or related methods. This is a\n   * classic Adapter pattern: sessionActions adapts the low-level credential\n   * operations to the high-level session API.\n   *\n   * The dependency array tracks which credentialActions methods are passed in,\n   * ensuring we rebuild if credential handling changes.\n   */\n  const sessionActions = useMemo(\n    () =>\n      createSessionActions({\n        getGoogleCredential: credentialActions.getGoogleCredential,\n        getAppleCredential: credentialActions.getAppleCredential,\n      }),\n    [credentialActions.getAppleCredential, credentialActions.getGoogleCredential]\n  );\n\n  /**\n   * Factory: accountActions \u2014 Constructs account-level auth methods.\n   *\n   * Account actions (changeEmail, unlinkProvider, deleteAccount) operate on\n   * the currently authenticated user. They are constructed with two types of\n   * dependencies:\n   *   - Guard clauses (getCurrentUser, requireAuthenticatedUser) to validate state\n   *   - Credential getters (getGoogleCredential, getAppleCredential) to re-authenticate\n   *     if needed before sensitive operations like email change or account deletion.\n   *\n   * Again, this is Dependency Injection via closures: the factory receives everything\n   * it needs, and we memoize to avoid reconstructing on every render.\n   */\n  const accountActions = useMemo(\n    () =>\n      createAccountActions({\n        getCurrentUser,\n        requireAuthenticatedUser,\n        getGoogleCredential: credentialActions.getGoogleCredential,\n        getAppleCredential: credentialActions.getAppleCredential,\n      }),\n    [\n      credentialActions.getAppleCredential,\n      credentialActions.getGoogleCredential,\n      getCurrentUser,\n      requireAuthenticatedUser,\n    ]\n  );\n\n  /**\n   * Context value construction \u2014 Assemble the public auth API.\n   *\n   * This memoized object is what consumers receive when they call useAuth().\n   * It includes:\n   *   - State: user, loading, isAnonymous, isAppleSignInAvailable\n   *   - Public methods: all the session, credential, and account actions\n   *\n   * The value is memoized to prevent unnecessary re-renders in consumers.\n   * By wrapping it in useMemo, we ensure that the object reference only changes\n   * when one of its properties actually changes. This is a textbook application\n   * of referential stability to avoid the \"context value identity pitfall\" \u2014 a\n   * common performance bug where a new object literal in the value prop causes\n   * all consumers to re-render even if the content hasn't changed.\n   *\n   * Dependency array: every property and method that goes into the value object.\n   * If any of these change (e.g., user logs in, sessionActions are reconstructed),\n   * the value object is rebuilt and consumers update.\n   */\n  const value = useMemo<AuthContextType>(\n    () => ({\n      user,\n      loading,\n      isAnonymous: user?.isAnonymous ?? false,\n      signUp: sessionActions.signUp,\n      signIn: sessionActions.signIn,\n      signInAnonymously: sessionActions.signInAnonymously,\n      signInWithGoogle: sessionActions.signInWithGoogle,\n      signInWithApple: sessionActions.signInWithApple,\n      linkAnonymousAccount: credentialActions.linkAnonymousAccount,\n      isAppleSignInAvailable,\n      logout: sessionActions.logout,\n      deleteAccount: accountActions.deleteAccount,\n      upgradeAnonymousWithGoogle: credentialActions.upgradeAnonymousWithGoogle,\n      upgradeAnonymousWithApple: credentialActions.upgradeAnonymousWithApple,\n      upgradeAnonymousWithEmail: credentialActions.upgradeAnonymousWithEmail,\n      signInWithPendingCredential: credentialActions.signInWithPendingCredential,\n      getGoogleCredential: credentialActions.getGoogleCredential,\n      getAppleCredential: credentialActions.getAppleCredential,\n      linkProvider: credentialActions.linkProvider,\n      unlinkProvider: accountActions.unlinkProvider,\n      changeEmail: accountActions.changeEmail,\n      sendPasswordReset: accountActions.sendPasswordReset,\n      getLinkedProviders: accountActions.getLinkedProviders,\n    }),\n    [\n      accountActions.changeEmail,\n      accountActions.deleteAccount,\n      accountActions.getLinkedProviders,\n      accountActions.sendPasswordReset,\n      accountActions.unlinkProvider,\n      credentialActions.getAppleCredential,\n      credentialActions.getGoogleCredential,\n      credentialActions.linkAnonymousAccount,\n      credentialActions.linkProvider,\n      credentialActions.signInWithPendingCredential,\n      credentialActions.upgradeAnonymousWithApple,\n      credentialActions.upgradeAnonymousWithEmail,\n      credentialActions.upgradeAnonymousWithGoogle,\n      isAppleSignInAvailable,\n      loading,\n      sessionActions.logout,\n      sessionActions.signIn,\n      sessionActions.signInAnonymously,\n      sessionActions.signInWithApple,\n      sessionActions.signInWithGoogle,\n      sessionActions.signUp,\n      user,\n    ]\n  );\n\n  // --- Render: Provide context to all children ---\n  // The Provider component makes this context available to any consumer\n  // (via useAuth) in the subtree. As the value changes, React notifies\n  // all subscribers and triggers re-renders.\n  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;\n}\n\n/**\n * useAuth \u2014 Consumer hook for the authentication context.\n *\n * This is the public API for accessing auth state and methods throughout the app.\n * It implements the Consumer part of the Provider pattern \u2014 any component that\n * needs auth can call this hook instead of passing auth state through props.\n *\n * Throws an error if called outside an AuthProvider, which is a fail-fast\n * pattern that catches integration bugs early (missing provider in the tree).\n *\n * Example:\n *   const { user, loading, signIn } = useAuth();\n *   if (loading) return <Spinner />;\n *   if (user) return <Home />;\n *   return <Login onSignIn={signIn} />;\n *\n * @returns The AuthContextType containing all auth state and methods\n * @throws If useAuth is called outside an AuthProvider\n */\nexport function useAuth() {\n  const context = useContext(AuthContext);\n  if (context === undefined) {\n    throw new Error(\"useAuth must be used within an AuthProvider\");\n  }\n  return context;\n}\n"}], "grading": {"eval_id": 0, "eval_name": "authcontext-provider-pattern", "expectations": [{"text": "Has a file-level header block explaining the module's architectural role", "passed": true, "evidence": "File contains structured header block with architectural explanation"}, {"text": "Mentions the Provider pattern by name in comments", "passed": true, "evidence": "Provider pattern mentioned"}, {"text": "Mentions the Observer pattern in the context of onAuthStateChanged", "passed": true, "evidence": "Observer pattern with onAuthStateChanged"}, {"text": "Mentions Factory Method or Dependency Injection for the action creators", "passed": true, "evidence": "Factory or Dependency Injection mentioned"}, {"text": "Has JSDoc on AuthProvider function", "passed": true, "evidence": "JSDoc on AuthProvider found"}, {"text": "Has JSDoc on useAuth hook", "passed": true, "evidence": "JSDoc on useAuth found"}, {"text": "Comments explain the isMounted race condition guard", "passed": true, "evidence": "Race condition guard explained"}, {"text": "Explains why useMemo is used for the context value (referential stability)", "passed": true, "evidence": "useMemo with referential stability"}, {"text": "Functional code is unchanged \u2014 only comments added", "passed": true, "evidence": "Output is TypeScript/TSX file with code structure intact"}, {"text": "Comments use senior engineer voice with pattern vocabulary, not just 'this does X'", "passed": true, "evidence": "Comments use design pattern vocabulary"}], "summary": {"passed": 10, "failed": 0, "total": 10, "pass_rate": 1.0}}}, {"id": "eval-0-authcontext-without_skill", "prompt": "Hey, can you add comments to the AuthContext.tsx file? It's in src/core/providers/contexts/AuthContext.tsx. I'm a new junior dev and I want to understand how auth works in this app.", "eval_id": 0, "outputs": [{"name": "AuthContext.tsx", "type": "text", "content": "// Import React hooks and utilities needed for context management\nimport React, {\n  createContext,     // Creates a new context to share auth state\n  useCallback,       // Memoizes callback functions to prevent unnecessary re-renders\n  useContext,        // Hook to access context values\n  useEffect,         // Hook to run side effects (like setting up subscriptions)\n  useMemo,           // Memoizes expensive computations to prevent recreating them\n  useState,          // Hook for component state management\n} from \"react\";\n\n// Platform detection - allows conditional logic for iOS vs Android\nimport { Platform } from \"react-native\";\n\n// Firebase auth imports - provides the authentication infrastructure\nimport { User, onAuthStateChanged } from \"firebase/auth\";\n\n// Third-party sign-in SDKs\nimport { GoogleSignin } from \"@react-native-google-signin/google-signin\";\nimport * as AppleAuthentication from \"expo-apple-authentication\";\n\n// Project-specific imports\nimport { auth } from \"@/firebase\";           // Firebase auth instance\nimport { env } from \"@core/config/env\";      // Environment variables\nimport {\n  AuthContextType,              // TypeScript type for the context\n  CredentialCollisionError,     // Custom error for credential conflicts\n} from \"@core/providers/contexts/auth/types\";\nimport { createCredentialActions } from \"@core/providers/contexts/auth/actions/credentialActions\";\nimport { createSessionActions } from \"@core/providers/contexts/auth/actions/sessionActions\";\nimport { createAccountActions } from \"@core/providers/contexts/auth/actions/accountActions\";\n\n// Re-export the error type so consumers can catch it\nexport { CredentialCollisionError } from \"@core/providers/contexts/auth/types\";\n\n// ============================================================================\n// GOOGLE SIGN-IN CONFIGURATION\n// ============================================================================\n// This section runs once when the module is loaded to configure Google Sign-In\nconsole.log('[Startup] AuthContext module loaded \u2014 configuring GoogleSignin');\n\n// Warn if Google client IDs are missing - required for Google Sign-In to work\nif (!env.google.webClientId && !env.google.iosClientId) {\n  console.warn(\"[Startup] Google Sign-In client IDs missing; check environment variables\");\n}\n\n// Configure the Google Sign-In SDK with the app's client IDs\ntry {\n  GoogleSignin.configure({\n    webClientId: env.google.webClientId,    // For web authentication\n    iosClientId: env.google.iosClientId,    // For iOS app authentication\n  });\n  console.log('[Startup] GoogleSignin.configure() succeeded');\n} catch (e) {\n  console.error('[Startup] GoogleSignin.configure() threw:', e);\n}\n\n// ============================================================================\n// CONTEXT CREATION\n// ============================================================================\n// Create the auth context - will be defined by AuthProvider and consumed by useAuth()\nconst AuthContext = createContext<AuthContextType | undefined>(undefined);\n\n/**\n * AuthProvider Component\n *\n * This component wraps your app and provides authentication state to all children.\n * It handles:\n * - Listening to Firebase auth state changes\n * - Checking Apple Sign-In availability on iOS\n * - Aggregating all auth actions from credential, session, and account modules\n * - Providing a single context value with all auth functionality\n *\n * Usage: Wrap your app root with <AuthProvider>{children}</AuthProvider>\n */\nexport function AuthProvider({ children }: { children: React.ReactNode }) {\n  console.log('[Startup] AuthProvider rendering');\n\n  // ========================================================================\n  // STATE MANAGEMENT\n  // ========================================================================\n\n  // Current authenticated user (null if not logged in)\n  const [user, setUser] = useState<User | null>(null);\n\n  // Loading state - true while checking Firebase auth, false once ready\n  const [loading, setLoading] = useState(true);\n\n  // Flag indicating whether Apple Sign-In is available on this device\n  // (Only relevant on iOS; always false on Android)\n  const [isAppleSignInAvailable, setIsAppleSignInAvailable] = useState(false);\n\n  // ========================================================================\n  // EFFECT 1: Check Apple Sign-In Availability (iOS only)\n  // ========================================================================\n  useEffect(() => {\n    console.log('[Startup] AuthProvider mounted \u2014 checking Apple auth availability');\n\n    // Flag to track if component is still mounted - prevents state updates on unmounted component\n    let isMounted = true;\n\n    // Only check on iOS - Android doesn't support Apple Sign-In\n    if (Platform.OS === \"ios\") {\n      // Asynchronously check if Apple Sign-In is available on this device\n      AppleAuthentication.isAvailableAsync()\n        .then((available) => {\n          console.log('[Startup] Apple auth available:', available);\n          // Only update state if component is still mounted\n          if (isMounted) {\n            setIsAppleSignInAvailable(available);\n          }\n        })\n        .catch((e) => {\n          console.warn('[Startup] Apple auth availability check failed:', e);\n          // On error, assume Apple Sign-In is not available\n          if (isMounted) {\n            setIsAppleSignInAvailable(false);\n          }\n        });\n    }\n\n    // Cleanup function - runs when component unmounts\n    // Prevents state updates after unmount\n    return () => {\n      isMounted = false;\n    };\n  }, []); // Empty dependency array - runs once on mount\n\n  // ========================================================================\n  // EFFECT 2: Subscribe to Firebase Auth State Changes\n  // ========================================================================\n  useEffect(() => {\n    console.log('[Startup] Subscribing to Firebase onAuthStateChanged');\n\n    try {\n      // Subscribe to Firebase auth state changes\n      // This fires whenever the user logs in, logs out, or the session changes\n      const unsubscribe = onAuthStateChanged(auth, (nextUser) => {\n        console.log('[Startup] onAuthStateChanged fired \u2014 user:', nextUser ? nextUser.uid : 'null');\n\n        // Update the user state with the current Firebase user\n        setUser(nextUser);\n\n        // Mark loading as complete - we've retrieved the auth state\n        setLoading(false);\n      });\n      console.log('[Startup] Firebase auth subscription active');\n\n      // Return the unsubscribe function to clean up the listener when component unmounts\n      return unsubscribe;\n    } catch (e) {\n      console.error('[Startup] onAuthStateChanged threw:', e);\n      // Even if subscription fails, mark loading as done so app doesn't hang\n      setLoading(false);\n    }\n  }, []); // Empty dependency array - runs once on mount\n\n  // ========================================================================\n  // HELPER FUNCTIONS\n  // ========================================================================\n\n  /**\n   * requireAuthenticatedUser\n   *\n   * Throws an error if no user is currently logged in.\n   * Use this function at the start of operations that require an authenticated user.\n   *\n   * Returns the current user if logged in, throws otherwise.\n   */\n  const requireAuthenticatedUser = useCallback((): User => {\n    if (!user) {\n      throw new Error(\"No user is currently signed in\");\n    }\n    return user;\n  }, [user]); // Re-creates if user changes\n\n  /**\n   * requireAnonymousUser\n   *\n   * Throws an error if the user is authenticated (not anonymous).\n   * Useful for operations only valid on anonymous accounts (like account linking).\n   *\n   * Returns the current user if they're anonymous, throws otherwise.\n   */\n  const requireAnonymousUser = useCallback((): User => {\n    const currentUser = requireAuthenticatedUser();\n    if (!currentUser.isAnonymous) {\n      throw new Error(\"User is not anonymous\");\n    }\n    return currentUser;\n  }, [requireAuthenticatedUser]); // Re-creates if requireAuthenticatedUser changes\n\n  /**\n   * getCurrentUser\n   *\n   * Simple getter for the current user without validation.\n   * May return null if no user is logged in.\n   */\n  const getCurrentUser = useCallback(() => user, [user]); // Re-creates if user changes\n\n  // ========================================================================\n  // ACTION CREATION: Memoize action creators from imported modules\n  // ========================================================================\n  // These create functions that handle credential operations (sign up, social login, account linking)\n  const credentialActions = useMemo(\n    () =>\n      createCredentialActions({\n        isAppleSignInAvailable,        // Share whether Apple Sign-In is available\n        requireAuthenticatedUser,       // Share validation function\n        requireAnonymousUser,           // Share validation function\n      }),\n    [isAppleSignInAvailable, requireAuthenticatedUser, requireAnonymousUser]\n  );\n\n  // These create functions that handle session operations (sign in, sign out)\n  const sessionActions = useMemo(\n    () =>\n      createSessionActions({\n        getGoogleCredential: credentialActions.getGoogleCredential,     // Get Google OAuth tokens\n        getAppleCredential: credentialActions.getAppleCredential,       // Get Apple OAuth tokens\n      }),\n    [credentialActions.getAppleCredential, credentialActions.getGoogleCredential]\n  );\n\n  // These create functions that handle account operations (change email, delete account, etc)\n  const accountActions = useMemo(\n    () =>\n      createAccountActions({\n        getCurrentUser,                                                  // Get current user without validation\n        requireAuthenticatedUser,                                        // Require user is logged in\n        getGoogleCredential: credentialActions.getGoogleCredential,     // Get Google OAuth tokens\n        getAppleCredential: credentialActions.getAppleCredential,       // Get Apple OAuth tokens\n      }),\n    [\n      credentialActions.getAppleCredential,\n      credentialActions.getGoogleCredential,\n      getCurrentUser,\n      requireAuthenticatedUser,\n    ]\n  );\n\n  // ========================================================================\n  // CONTEXT VALUE: Assemble all auth state and functions\n  // ========================================================================\n  // The value object contains everything that will be exposed to consumers of useAuth()\n  const value = useMemo<AuthContextType>(\n    () => ({\n      // State\n      user,                                    // Current Firebase user object (null if not logged in)\n      loading,                                 // True while checking auth status, false when ready\n      isAnonymous: user?.isAnonymous ?? false, // Whether current user is anonymous\n      isAppleSignInAvailable,                  // Whether this device supports Apple Sign-In\n\n      // Session functions (signing in/out)\n      signUp: sessionActions.signUp,                                // Email/password registration\n      signIn: sessionActions.signIn,                                // Email/password login\n      signInAnonymously: sessionActions.signInAnonymously,          // Create anonymous account\n      signInWithGoogle: sessionActions.signInWithGoogle,            // OAuth login with Google\n      signInWithApple: sessionActions.signInWithApple,              // OAuth login with Apple\n      logout: sessionActions.logout,                                // Sign out current user\n\n      // Credential functions (obtaining OAuth tokens, managing credentials)\n      getGoogleCredential: credentialActions.getGoogleCredential,         // Get Google OAuth credential\n      getAppleCredential: credentialActions.getAppleCredential,           // Get Apple OAuth credential\n      signInWithPendingCredential: credentialActions.signInWithPendingCredential, // Use stored credential\n      linkAnonymousAccount: credentialActions.linkAnonymousAccount,       // Migrate anonymous account\n      linkProvider: credentialActions.linkProvider,                       // Add a social login provider\n\n      // Anonymous account upgrade functions (converting anonymous to permanent account)\n      upgradeAnonymousWithGoogle: credentialActions.upgradeAnonymousWithGoogle,   // Convert with Google\n      upgradeAnonymousWithApple: credentialActions.upgradeAnonymousWithApple,     // Convert with Apple\n      upgradeAnonymousWithEmail: credentialActions.upgradeAnonymousWithEmail,     // Convert with email/password\n\n      // Account functions (managing existing accounts)\n      changeEmail: accountActions.changeEmail,                      // Update account email\n      sendPasswordReset: accountActions.sendPasswordReset,          // Send password reset email\n      getLinkedProviders: accountActions.getLinkedProviders,        // List connected providers\n      unlinkProvider: accountActions.unlinkProvider,                // Disconnect a provider\n      deleteAccount: accountActions.deleteAccount,                  // Permanently delete account\n    }),\n    [\n      // Dependencies - if any of these change, the context value is recreated\n      // (This is important for performance but ensures all functions are always up-to-date)\n      accountActions.changeEmail,\n      accountActions.deleteAccount,\n      accountActions.getLinkedProviders,\n      accountActions.sendPasswordReset,\n      accountActions.unlinkProvider,\n      credentialActions.getAppleCredential,\n      credentialActions.getGoogleCredential,\n      credentialActions.linkAnonymousAccount,\n      credentialActions.linkProvider,\n      credentialActions.signInWithPendingCredential,\n      credentialActions.upgradeAnonymousWithApple,\n      credentialActions.upgradeAnonymousWithEmail,\n      credentialActions.upgradeAnonymousWithGoogle,\n      isAppleSignInAvailable,\n      loading,\n      sessionActions.logout,\n      sessionActions.signIn,\n      sessionActions.signInAnonymously,\n      sessionActions.signInWithApple,\n      sessionActions.signInWithGoogle,\n      sessionActions.signUp,\n      user,\n    ]\n  );\n\n  // Provide the context value to all child components\n  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;\n}\n\n/**\n * useAuth Hook\n *\n * Custom hook to access the auth context from any component within AuthProvider.\n *\n * Usage:\n *   const { user, signIn, logout } = useAuth();\n *\n * Throws an error if used outside of an AuthProvider.\n */\nexport function useAuth() {\n  const context = useContext(AuthContext);\n\n  // Validate that hook is used within AuthProvider\n  if (context === undefined) {\n    throw new Error(\"useAuth must be used within an AuthProvider\");\n  }\n\n  return context;\n}\n"}], "grading": {"eval_id": 0, "eval_name": "authcontext-provider-pattern", "expectations": [{"text": "Has a file-level header block explaining the module's architectural role", "passed": false, "evidence": "No structured header block found"}, {"text": "Mentions the Provider pattern by name in comments", "passed": false, "evidence": "Provider pattern not mentioned"}, {"text": "Mentions the Observer pattern in the context of onAuthStateChanged", "passed": false, "evidence": "Observer pattern not explained"}, {"text": "Mentions Factory Method or Dependency Injection for the action creators", "passed": false, "evidence": "Not found"}, {"text": "Has JSDoc on AuthProvider function", "passed": true, "evidence": "JSDoc on AuthProvider found"}, {"text": "Has JSDoc on useAuth hook", "passed": true, "evidence": "JSDoc on useAuth found"}, {"text": "Comments explain the isMounted race condition guard", "passed": true, "evidence": "Race condition guard explained"}, {"text": "Explains why useMemo is used for the context value (referential stability)", "passed": false, "evidence": "Not found"}, {"text": "Functional code is unchanged \u2014 only comments added", "passed": true, "evidence": "Output is TypeScript/TSX file with code structure intact"}, {"text": "Comments use senior engineer voice with pattern vocabulary, not just 'this does X'", "passed": true, "evidence": "Comments use design pattern vocabulary"}], "summary": {"passed": 5, "failed": 5, "total": 10, "pass_rate": 0.5}}}, {"id": "eval-1-musicviewmodel-with_skill", "prompt": "Comment the music view model hook for me \u2014 it's at src/features/music/hooks/useMusicViewModel.ts. I want to understand the MVVM pattern being used here.", "eval_id": 1, "outputs": [{"name": "useMusicViewModel.ts", "type": "text", "content": "import { useCallback, useState } from 'react';\nimport { useRouter } from 'expo-router';\nimport { Ionicons } from '@expo/vector-icons';\nimport { useTheme } from '@core/providers/contexts/ThemeContext';\nimport { useSubscription } from '@core/providers/contexts/SubscriptionContext';\nimport {\n  useSleepSounds,\n  useWhiteNoise,\n  useMusic,\n  useAsmr,\n  useAlbums,\n} from '@shared/hooks/queries/useMusicQueries';\nimport type { FirestoreSleepSound, FirestoreMusicItem, FirestoreAlbum } from '../data/musicRepository';\n\n/**\n * ============================================================\n * useMusicViewModel \u2014 Music Feature ViewModel Hook (MVVM Pattern)\n * ============================================================\n *\n * Architectural Role:\n *   This hook embodies the ViewModel layer in Calmdemy's MVVM architecture.\n *   It serves as the **single source of truth** for all music-related UI state\n *   and behavior, sitting between the View (music screens) and the Model layer\n *   (repositories + React Query hooks). The ViewModel:\n *\n *   1. **Aggregates** server state (music, albums, sleep sounds, etc.) from\n *      React Query hooks that wrap Firestore access\n *   2. **Extracts** cross-cutting concerns (theme, subscription status) from\n *      global Context providers\n *   3. **Encapsulates** UI logic (navigation, paywall gating, icon mapping) as\n *      pure callbacks\n *   4. **Exposes** a clean public interface that screens consume to drive their\n *      rendering and event handling\n *\n *   Benefits of this pattern:\n *   - Views become \"dumb\" \u2014 they render what the ViewModel tells them to\n *   - Business logic is testable in isolation from React components\n *   - Changes to data sources (Firestore \u2192 Supabase) only affect the Model layer\n *   - Multiple screens can reuse the same ViewModel with no duplication\n *\n * Design Patterns in Play:\n *   - MVVM (Model\u2013View\u2013ViewModel): The core structural pattern that separates\n *     concerns into data (Model), presentation (View), and orchestration (ViewModel)\n *   - Repository Pattern: Firestore access is hidden behind musicRepository\n *     functions (getSleepSounds, getMusic, etc.), which react-query hooks wrap\n *   - Provider Pattern (React Context): Global state (theme, subscription) flows\n *     through context consumers (useTheme, useSubscription) \u2014 this decouples\n *     the ViewModel from knowing *how* the data arrives\n *   - Facade Pattern: This ViewModel acts as a facade over the complex interplay\n *     of React Query caching, Firestore queries, and context state. Consumers\n *     see one clean interface instead of juggling 7+ hooks\n *   - Observer Pattern: React Query's useQuery hooks are observers \u2014 they listen\n *     to server changes and trigger re-renders when data mutates\n *\n * Key Dependencies:\n *   - React hooks: useState, useCallback (closure-based dependency injection)\n *   - expo-router: declarative navigation primitives\n *   - React Query hooks: useSleepSounds, useMusic, useAlbums, etc. These handle\n *     cache invalidation and server synchronization transparently\n *   - Context providers: useTheme, useSubscription (global UI and subscription state)\n *   - Firestore types: FirestoreSleepSound, FirestoreMusicItem, FirestoreAlbum\n *\n * Consumed By:\n *   Music feature screens (e.g., MusicExploreScreen, SleepSoundsScreen) that\n *   call useMusicViewModel() to get the ViewModel and then render based on its\n *   exposed state and callbacks.\n * ============================================================\n */\n\nexport function useMusicViewModel() {\n  // --- Phase 1: Extract global cross-cutting concerns ---\n  // These come from React Context providers, not local state. The ViewModel\n  // doesn't own them, but it needs to expose them so views can react to theme\n  // and subscription changes. This is dependency injection via context.\n  const router = useRouter();\n  const { theme, isDark } = useTheme();\n  const { isPremium: hasSubscription } = useSubscription();\n\n  // --- Phase 2: Fetch server state via React Query hooks ---\n  // Each of these is a React Query hook that wraps a Firestore repository function.\n  // The hook handles caching, background revalidation, and stale-time management.\n  // We provide defaults (= []) so TypeScript knows these are always arrays, even\n  // during the loading state. This avoids optional chaining throughout the View.\n  //\n  // Pattern: Read-Through Cache via React Query. When a query is first mounted,\n  // it fetches from Firestore. On subsequent mounts (same queryKey), it returns\n  // cached data immediately and revalidates in the background. The View never\n  // needs to know about this caching strategy \u2014 it just consumes the data.\n  const { data: sleepSounds = [] } = useSleepSounds();\n  const { data: whiteNoise = [] } = useWhiteNoise();\n  const { data: music = [] } = useMusic();\n  const { data: asmr = [] } = useAsmr();\n  const { data: albums = [] } = useAlbums();\n\n  // --- Phase 3: Local UI state ---\n  // showPaywall is the only piece of local state because it's ephemeral \u2014\n  // when the user dismisses the paywall, we flip this flag and move on.\n  // It's not worth syncing to Firestore or caching in React Query.\n  const [showPaywall, setShowPaywall] = useState(false);\n\n  /**\n   * Handles a user tap on a music item or sleep sound.\n   *\n   * This implements the **Gatekeeper pattern** for premium content access:\n   * before allowing navigation to the player screen, we check if the content\n   * is premium (not free) AND whether the user lacks a subscription. If both\n   * are true, we show the paywall and short-circuit (return early). This is\n   * a single checkpoint that prevents unauthorized access to paid resources.\n   *\n   * The dependency array includes [hasSubscription, router] because:\n   *   - hasSubscription: The guard clause depends on this value; if it changes\n   *     (e.g., user upgrades), the callback must be recreated so closures\n   *     capture the new value\n   *   - router: The expo-router instance is stable, but we list it for clarity\n   *     (react-eslint-plugin/exhaustive-deps would warn otherwise)\n   *\n   * @param sound - Either a music item (white noise, music, ASMR) or a sleep sound;\n   *                both have isFree and id fields (discriminated union)\n   */\n  const handleSoundPress = useCallback((sound: FirestoreMusicItem | FirestoreSleepSound) => {\n    // Guard clause: short-circuit if the content is premium and the user hasn't\n    // purchased a subscription. This is the Gatekeeper pattern \u2014 a single\n    // checkpoint that prevents unauthorized access to paid resources.\n    if (!sound.isFree && !hasSubscription) {\n      setShowPaywall(true);\n      return;\n    }\n    // Happy path: navigate to the player screen with the sound's ID as a route param\n    router.push(`/music/${sound.id}`);\n  }, [hasSubscription, router]);\n\n  /**\n   * Handles a user tap on an album.\n   *\n   * Albums do not have a premium gate \u2014 all albums are accessible to free users.\n   * This is a straightforward navigation callback with no conditional logic.\n   * It simply routes to the album detail screen.\n   *\n   * @param album - The album object containing id, title, tracks, etc.\n   */\n  const handleAlbumPress = useCallback((album: FirestoreAlbum) => {\n    router.push(`/album/${album.id}`);\n  }, [router]);\n\n  /**\n   * Maps category strings to Ionicons glyph names using a switch statement.\n   *\n   * This is a **pure function** (no side effects) that transforms a semantic\n   * category name (e.g., \"ambient\") into an icon name (e.g., \"planet\"). The\n   * switch statement is a simple discriminated-union exhaustiveness check:\n   * the TypeScript compiler verifies that all known categories have a case.\n   * The default case (\"disc\") is a graceful fallback for unknown categories.\n   *\n   * Why useCallback? The mapping function is trivial and always returns the same\n   * result for the same input. However, we memoize it with useCallback([], [])\n   * because downstream components may use it as a dependency in their own effects\n   * or useMemo hooks. By memoizing, we ensure a stable reference across renders,\n   * preventing unnecessary re-renders in those consumers (a common performance\n   * pattern in React).\n   *\n   * @param category - A string like \"ambient\", \"piano\", \"nature\", \"classical\", \"lofi\"\n   * @returns The Ionicons glyph name (a key of the glyph map) to render for that category\n   */\n  const getCategoryIcon = useCallback((category: string): keyof typeof Ionicons.glyphMap => {\n    switch (category) {\n      case 'ambient':\n        return 'planet';\n      case 'piano':\n        return 'musical-notes';\n      case 'nature':\n        return 'leaf';\n      case 'classical':\n        return 'musical-note';\n      case 'lofi':\n        return 'headset';\n      default:\n        // Graceful Degradation: if the category is unknown, fall back to a\n        // generic \"disc\" icon. This ensures the UI never crashes on unexpected\n        // category values \u2014 the feature degrades gracefully.\n        return 'disc';\n    }\n  }, []);\n\n  /**\n   * Generic navigation helper for arbitrary routes.\n   *\n   * This is a thin wrapper around router.push() that allows Views to navigate\n   * without directly importing the router hook. The \"as any\" cast bypasses\n   * TypeScript's strict route type-checking \u2014 we use this when the route is\n   * computed at runtime (e.g., from a dropdown menu) rather than a hardcoded string.\n   *\n   * Note: This is a code smell. In a fully typed system, every route would have\n   * a type-safe variant and we wouldn't need this escape hatch. Consider refactoring\n   * if you find yourself calling this frequently.\n   *\n   * @param route - A route path (e.g., \"/music/explore\", \"/onboarding\")\n   */\n  const navigateToRoute = useCallback((route: string) => {\n    router.push(route as any);\n  }, [router]);\n\n  // --- Phase 4: Export the ViewModel interface ---\n  // This object is the public API of the ViewModel. Views destructure and use\n  // these properties. The shape is intentionally flat and self-documenting.\n  // If you find this object growing beyond ~15 properties, consider breaking\n  // it into sub-ViewModels (e.g., useMusicContentViewModel, usePremiumViewModel)\n  // to keep complexity manageable.\n  return {\n    // Theme and subscription state (from context providers)\n    theme,\n    isDark,\n    hasSubscription,\n    // Server state (from React Query hooks)\n    sleepSounds,\n    whiteNoise,\n    music,\n    asmr,\n    albums,\n    // Local UI state\n    showPaywall,\n    setShowPaywall,\n    // Event handlers (pure callbacks)\n    handleSoundPress,\n    handleAlbumPress,\n    getCategoryIcon,\n    navigateToRoute,\n  };\n}\n"}], "grading": {"eval_id": 1, "eval_name": "musicviewmodel-mvvm-pattern", "expectations": [{"text": "Has a file-level header block explaining the ViewModel's role in MVVM", "passed": true, "evidence": "File contains structured header block with architectural explanation"}, {"text": "Mentions MVVM pattern by name and explains Model/View/ViewModel layers", "passed": true, "evidence": "MVVM explained"}, {"text": "Comments explain the paywall guard clause as a gatekeeper/access control pattern", "passed": true, "evidence": "Gatekeeper pattern explained"}, {"text": "Has JSDoc on the useMusicViewModel function", "passed": true, "evidence": "JSDoc on hook found"}, {"text": "Has JSDoc or detailed comments on handleSoundPress and handleAlbumPress", "passed": true, "evidence": "Handler documentation found"}, {"text": "Explains the React Query hooks and caching strategy", "passed": true, "evidence": "React Query explained"}, {"text": "Comments explain the return object as the ViewModel's public interface/contract", "passed": true, "evidence": "Return contract documented"}, {"text": "Functional code is unchanged \u2014 only comments added", "passed": true, "evidence": "Output is TypeScript/TSX file with code structure intact"}, {"text": "Comments use senior engineer voice with pattern vocabulary", "passed": true, "evidence": "Comments use design pattern vocabulary"}], "summary": {"passed": 9, "failed": 0, "total": 9, "pass_rate": 1.0}}}, {"id": "eval-1-musicviewmodel-without_skill", "prompt": "Comment the music view model hook for me \u2014 it's at src/features/music/hooks/useMusicViewModel.ts. I want to understand the MVVM pattern being used here.", "eval_id": 1, "outputs": [{"name": "useMusicViewModel.ts", "type": "text", "content": "import { useCallback, useState } from 'react';\nimport { useRouter } from 'expo-router';\nimport { Ionicons } from '@expo/vector-icons';\nimport { useTheme } from '@core/providers/contexts/ThemeContext';\nimport { useSubscription } from '@core/providers/contexts/SubscriptionContext';\nimport {\n  useSleepSounds,\n  useWhiteNoise,\n  useMusic,\n  useAsmr,\n  useAlbums,\n} from '@shared/hooks/queries/useMusicQueries';\nimport type { FirestoreSleepSound, FirestoreMusicItem, FirestoreAlbum } from '../data/musicRepository';\n\n/**\n * useMusicViewModel Hook\n *\n * MVVM Pattern Implementation:\n * This hook serves as the ViewModel layer in the MVVM architecture. It acts as an\n * intermediary between the View (React components) and the Model (data/business logic).\n *\n * Responsibilities:\n * - Manage UI state (showPaywall)\n * - Expose data from the Model layer (music, albums, sleep sounds, etc.)\n * - Provide presenters/handlers for View interactions (handleSoundPress, handleAlbumPress)\n * - Transform data for display (getCategoryIcon)\n * - Enforce business logic (subscription checks, routing)\n *\n * Benefits of this pattern:\n * - UI logic is decoupled from component presentation\n * - Reusable across multiple components\n * - Testable business logic without rendering components\n * - Clear separation of concerns\n */\nexport function useMusicViewModel() {\n  // ============ DEPENDENCIES (From Core Providers) ============\n  // These provide access to app-wide state and services\n  const router = useRouter();\n  const { theme, isDark } = useTheme(); // UI theme context\n  const { isPremium: hasSubscription } = useSubscription(); // User subscription status\n\n  // ============ MODEL LAYER (Data from Firestore) ============\n  // These hooks fetch data from the data layer (Firestore queries wrapped in custom hooks)\n  // They follow the React Query pattern with automatic caching and refetching\n  const { data: sleepSounds = [] } = useSleepSounds(); // Array of sleep sound items\n  const { data: whiteNoise = [] } = useWhiteNoise(); // Array of white noise items\n  const { data: music = [] } = useMusic(); // Array of music tracks\n  const { data: asmr = [] } = useAsmr(); // Array of ASMR audio items\n  const { data: albums = [] } = useAlbums(); // Array of music albums\n\n  // ============ LOCAL UI STATE (View Model State) ============\n  // Managed state specific to the UI layer (not persisted to backend)\n  const [showPaywall, setShowPaywall] = useState(false); // Controls paywall modal visibility\n\n  // ============ EVENT HANDLERS (Presenter Functions) ============\n\n  /**\n   * Handles when a user taps a sound/music item\n   * Enforces subscription logic: non-free items require subscription\n   * Routes to detail page if access is allowed\n   *\n   * @param sound - The music or sleep sound item user tapped\n   */\n  const handleSoundPress = useCallback((sound: FirestoreMusicItem | FirestoreSleepSound) => {\n    // Business logic: Check if item requires subscription and user doesn't have it\n    if (!sound.isFree && !hasSubscription) {\n      // Show paywall to prompt user to subscribe\n      setShowPaywall(true);\n      return;\n    }\n    // Navigate to sound detail page if access is granted\n    router.push(`/music/${sound.id}`);\n  }, [hasSubscription, router]);\n\n  /**\n   * Handles when a user taps an album\n   * Routes to the album detail page\n   * No subscription check needed (albums appear to be free to browse)\n   *\n   * @param album - The album user tapped\n   */\n  const handleAlbumPress = useCallback((album: FirestoreAlbum) => {\n    router.push(`/album/${album.id}`);\n  }, [router]);\n\n  /**\n   * Maps music category names to icon keys from the Ionicons library\n   * Used in the View to display appropriate visual indicators for each category\n   *\n   * This is a presentation helper that transforms domain data into UI-friendly data.\n   * Centralizing this logic makes it easy to update icons across all components\n   * that use this ViewModel.\n   *\n   * @param category - The music category name (e.g., 'ambient', 'piano')\n   * @returns The Ionicons glyph name to display\n   */\n  const getCategoryIcon = useCallback((category: string): keyof typeof Ionicons.glyphMap => {\n    switch (category) {\n      case 'ambient':\n        return 'planet'; // Planet icon for ambient/space sounds\n      case 'piano':\n        return 'musical-notes'; // Musical notes icon for piano\n      case 'nature':\n        return 'leaf'; // Leaf icon for nature sounds\n      case 'classical':\n        return 'musical-note'; // Single note icon for classical\n      case 'lofi':\n        return 'headset'; // Headset icon for lofi\n      default:\n        // Fallback icon if category doesn't match\n        return 'disc';\n    }\n  }, []);\n\n  /**\n   * Generic route navigation helper\n   * Provides a simple interface for navigating to any route\n   *\n   * Note: Uses 'as any' to bypass strict typing - this is a pragmatic but imperfect solution\n   *\n   * @param route - The route path to navigate to\n   */\n  const navigateToRoute = useCallback((route: string) => {\n    router.push(route as any);\n  }, [router]);\n\n  // ============ RETURN OBJECT (ViewModel Interface) ============\n  // This is the contract between the ViewModel and Views that consume this hook\n  // Views should only interact with the data/handlers exposed here\n  return {\n    // UI Theme Data\n    theme,\n    isDark,\n\n    // User State\n    hasSubscription,\n\n    // Model Data (fetched from Firestore)\n    sleepSounds,\n    whiteNoise,\n    music,\n    asmr,\n    albums,\n\n    // Local UI State\n    showPaywall,\n    setShowPaywall,\n\n    // Event Handlers (Presenters)\n    handleSoundPress,\n    handleAlbumPress,\n    getCategoryIcon,\n    navigateToRoute,\n  };\n}\n"}], "grading": {"eval_id": 1, "eval_name": "musicviewmodel-mvvm-pattern", "expectations": [{"text": "Has a file-level header block explaining the ViewModel's role in MVVM", "passed": false, "evidence": "No structured header block found"}, {"text": "Mentions MVVM pattern by name and explains Model/View/ViewModel layers", "passed": true, "evidence": "MVVM explained"}, {"text": "Comments explain the paywall guard clause as a gatekeeper/access control pattern", "passed": false, "evidence": "Not found"}, {"text": "Has JSDoc on the useMusicViewModel function", "passed": true, "evidence": "JSDoc on hook found"}, {"text": "Has JSDoc or detailed comments on handleSoundPress and handleAlbumPress", "passed": true, "evidence": "Handler documentation found"}, {"text": "Explains the React Query hooks and caching strategy", "passed": true, "evidence": "React Query explained"}, {"text": "Comments explain the return object as the ViewModel's public interface/contract", "passed": true, "evidence": "Return contract documented"}, {"text": "Functional code is unchanged \u2014 only comments added", "passed": true, "evidence": "Output is TypeScript/TSX file with code structure intact"}, {"text": "Comments use senior engineer voice with pattern vocabulary", "passed": true, "evidence": "Comments use design pattern vocabulary"}], "summary": {"passed": 7, "failed": 2, "total": 9, "pass_rate": 0.78}}}, {"id": "eval-2-homerepository-with_skill", "prompt": "Can you go through src/features/home/data/homeRepository.ts and add detailed comments? I need to understand the data layer and how Firestore queries work in this project.", "eval_id": 2, "outputs": [{"name": "homeRepository.ts", "type": "text", "content": "import {\n  addDoc,\n  collection,\n  deleteDoc,\n  doc,\n  getDoc,\n  getDocs,\n  limit,\n  query,\n  serverTimestamp,\n  Timestamp,\n  where,\n} from 'firebase/firestore';\nimport { db } from '../../../firebase';\nimport {\n  DailyQuote,\n  ListeningHistoryItem,\n  UserFavorite,\n} from '../../../types';\nimport { getEmergencyMeditationById, getCourses } from '../../meditate/data/meditateRepository';\nimport { getSeries, getSleepMeditationById } from '../../sleep/data/sleepRepository';\nimport { getAlbums } from '../../music/data/musicRepository';\n\n/**\n * ============================================================\n * homeRepository.ts \u2014 Home Feature Data Access Layer (Repository Pattern)\n * ============================================================\n *\n * Architectural Role:\n *   This module encapsulates all Firestore data access for the home feature,\n *   implementing the Repository pattern \u2014 a key layer in Calmdemy's MVVM\n *   architecture. All Firestore queries, mutations, and cross-feature data\n *   resolution live here. This layer decouples the UI (screens/components) and\n *   business logic (ViewModels) from the persistence mechanism, allowing us to\n *   swap Firebase for another backend without touching consuming code.\n *\n * Design Patterns:\n *   - Repository Pattern: All database access is funneled through this module's\n *     exported functions. The home screens and ViewModels never call Firestore\n *     directly; they depend only on these functions.\n *   - Query Builder (Firestore API): Firestore's query() + where() + limit()\n *     constructs declarative queries, separating the *what* (query shape) from\n *     the *how* (execution engine).\n *   - Read-Before-Write: toggleFavorite() queries for existing records before\n *     deciding to update or delete \u2014 idempotent by design. This is a safeguard\n *     against duplicate favorites.\n *   - Graceful Degradation: getTodayQuote() falls back to a random quote if\n *     today's curated quote is missing from Firestore, keeping the home screen\n *     functional even when data is incomplete.\n *   - Polymorphic Content Resolution: getContentById() uses discriminated unions\n *     (content_type: 'meditation' | 'nature_sound' | ...) and switch logic to\n *     resolve heterogeneous content across multiple feature repositories\n *     (meditate, sleep, music). This avoids a large Firestore fan-out query.\n *   - Denormalization & Timestamp Normalization: Listening history and favorites\n *     store timestamps from Firestore's serverTimestamp() and normalize them to\n *     ISO strings for consistent client-side handling across platforms.\n *\n * Cross-Feature Dependencies:\n *   - Imports from meditateRepository: getEmergencyMeditationById, getCourses\n *   - Imports from sleepRepository: getSeries, getSleepMeditationById\n *   - Imports from musicRepository: getAlbums\n *   This repository acts as an aggregator, fetching from sibling features to\n *   resolve favorited and recently-played content, enabling a unified home screen.\n *\n * Key Firestore Collections:\n *   - daily_quotes: Curated daily inspirational quotes (structured by date)\n *   - user_favorites: Denormalized pointers to user-favorited content\n *   - listening_history: User activity stream of played content\n *   - guided_meditations, bedtime_stories, breathing_exercises, sleep_sounds:\n *     Content tables queried directly by getContentById() for fallback cases\n *\n * Consumed By:\n *   - Home screen and ViewModel hooks (useHomeViewModel)\n *   - Profile screens reading favorites and listening history\n *   - Cross-feature navigation (e.g., tapping \"play recent\" from another screen)\n * ============================================================\n */\n\n// --- Collection References ---\n// These are Firestore collection references used throughout the module.\n// Caching them at the module level avoids repeated collection() calls\n// and provides a single source of truth for collection names.\nconst quotesCollection = collection(db, 'daily_quotes');\nconst favoritesCollection = collection(db, 'user_favorites');\nconst listeningHistoryCollection = collection(db, 'listening_history');\n\n// ==================== DAILY QUOTES ====================\n\n/**\n * Retrieves today's curated inspirational quote from Firestore.\n *\n * This function demonstrates the Graceful Degradation pattern. It first queries\n * for a quote with today's date (formatted as YYYY-MM-DD). If no curated quote\n * exists for today, it falls back to a random quote from the entire collection,\n * ensuring the home screen never shows an empty state. The fallback provides a\n * poor user experience (random quote instead of curated), but at least users\n * still see *something* inspirational.\n *\n * @returns A DailyQuote object (id, text, author, date) or null if the\n *          daily_quotes collection is empty or an error occurs.\n */\nexport async function getTodayQuote(): Promise<DailyQuote | null> {\n  try {\n    // --- Phase 1: Query for today's curated quote ---\n    // Format today's date as ISO string and extract the date portion (YYYY-MM-DD).\n    // This matches the schema used in the daily_quotes collection.\n    const today = new Date().toISOString().split('T')[0];\n\n    const q = query(quotesCollection, where('date', '==', today), limit(1));\n    const snapshot = await getDocs(q);\n\n    // --- Phase 2: Fallback to random quote if today's quote is missing ---\n    // If the curated quote for today is not found, fetch all quotes and pick one\n    // at random. This is Graceful Degradation \u2014 the feature degrades gracefully\n    // when the expected data (today's quote) is absent.\n    if (snapshot.empty) {\n      const allQuotesSnapshot = await getDocs(quotesCollection);\n      if (allQuotesSnapshot.empty) return null;\n\n      const randomIndex = Math.floor(\n        Math.random() * allQuotesSnapshot.docs.length\n      );\n      const docSnapshot = allQuotesSnapshot.docs[randomIndex];\n      return { id: docSnapshot.id, ...docSnapshot.data() } as DailyQuote;\n    }\n\n    // --- Phase 3: Return today's curated quote ---\n    const docSnapshot = snapshot.docs[0];\n    return { id: docSnapshot.id, ...docSnapshot.data() } as DailyQuote;\n  } catch (error) {\n    console.error('Error fetching daily quote:', error);\n    return null;\n  }\n}\n\n// ==================== FAVORITES ====================\n\n/**\n * Fetches all favorited content for a given user, sorted by most recent first.\n *\n * This function queries the user_favorites collection by user_id and returns\n * a list of UserFavorite pointers. Note that this returns *metadata* (the fact\n * that a user favorited something), not the content itself. Use getFavoritesWithDetails()\n * to also fetch the actual content (title, thumbnail, etc.) for rendering.\n *\n * The function also handles Firestore Timestamp normalization: Firestore's\n * serverTimestamp() returns a Timestamp object on the client, which we convert\n * to ISO string format for consistent cross-platform handling. If a timestamp\n * is missing (edge case), we default to now.\n *\n * @param userId - The authenticated user's UID (partition key for the query)\n * @returns Array of UserFavorite objects, sorted by favorited_at (newest first).\n *          Returns empty array on error.\n */\nexport async function getUserFavorites(userId: string): Promise<UserFavorite[]> {\n  try {\n    // --- Phase 1: Query all favorites for this user ---\n    const q = query(favoritesCollection, where('user_id', '==', userId));\n    const snapshot = await getDocs(q);\n\n    // --- Phase 2: Normalize Firestore Timestamp to ISO string ---\n    // Firestore returns serverTimestamp() values as Timestamp objects on the client.\n    // We convert them to ISO strings for consistent handling across React Native and\n    // web platforms. This normalization is a best practice for reducing platform-\n    // specific timestamp handling throughout the app.\n    const items = snapshot.docs.map((docSnapshot) => {\n      const data = docSnapshot.data();\n      return {\n        id: docSnapshot.id,\n        ...data,\n        favorited_at:\n          data.favorited_at instanceof Timestamp\n            ? data.favorited_at.toDate().toISOString()\n            : new Date().toISOString(),\n      } as UserFavorite;\n    });\n\n    // --- Phase 3: Sort by most recent favorite first ---\n    return items.sort(\n      (a, b) =>\n        new Date(b.favorited_at).getTime() -\n        new Date(a.favorited_at).getTime()\n    );\n  } catch (error) {\n    console.error('Error fetching favorites:', error);\n    return [];\n  }\n}\n\n/**\n * Toggles a user's favorite status for a piece of content.\n *\n * This function implements the classic Read-Before-Write pattern (also called\n * an Optimistic Toggle or Idempotent Toggle). It first queries whether the user\n * has already favorited this content. If yes, it deletes the favorite record\n * (un-favorite). If no, it creates a new favorite record (favorite). This ensures\n * that calling toggleFavorite multiple times with the same parameters produces\n * idempotent results \u2014 the operation is safe to retry.\n *\n * The contentType parameter is a discriminated union (type tag) that helps\n * the system understand what kind of content is being favorited. This is used\n * later by getContentById() to fetch content from the correct feature repository.\n *\n * @param userId - The authenticated user's UID\n * @param contentId - The Firestore document ID of the content being toggled\n * @param contentType - The kind of content: meditation, nature_sound, bedtime_story, etc.\n *                      Used as a type tag for polymorphic content resolution.\n * @returns true if the item is now favorited (after the operation),\n *          false if it was un-favorited. Returns false on error.\n */\nexport async function toggleFavorite(\n  userId: string,\n  contentId: string,\n  contentType:\n    | 'meditation'\n    | 'nature_sound'\n    | 'bedtime_story'\n    | 'breathing_exercise'\n    | 'series_chapter'\n    | 'album_track'\n    | 'emergency'\n    | 'course_session'\n    | 'sleep_meditation'\n): Promise<boolean> {\n  try {\n    // --- Phase 1: Query existing favorite (read-before-write) ---\n    // Check if this user has already favorited this content. We use both\n    // user_id and content_id as query predicates to find the specific record.\n    const q = query(\n      favoritesCollection,\n      where('user_id', '==', userId),\n      where('content_id', '==', contentId)\n    );\n    const existing = await getDocs(q);\n\n    // --- Phase 2: Delete if already favorited (un-favorite) ---\n    // If the favorite exists, delete it and return false to indicate\n    // the new state is \"not favorited\". We use Promise.all() to handle\n    // the rare edge case where the same content was favorited multiple times.\n    if (!existing.empty) {\n      const deletePromises = existing.docs.map((docSnapshot) =>\n        deleteDoc(docSnapshot.ref)\n      );\n      await Promise.all(deletePromises);\n      return false;\n    }\n\n    // --- Phase 3: Create new favorite (favorite) ---\n    // If no existing favorite, create one. serverTimestamp() is a special\n    // Firestore value that the server replaces with the server's current time,\n    // ensuring consistent timestamps regardless of client clock skew.\n    await addDoc(favoritesCollection, {\n      user_id: userId,\n      content_id: contentId,\n      content_type: contentType,\n      favorited_at: serverTimestamp(),\n    });\n    return true;\n  } catch (error) {\n    console.error('Error toggling favorite:', error);\n    return false;\n  }\n}\n\n/**\n * Checks if a user has favorited a specific piece of content.\n *\n * This is a simple existence check \u2014 it queries for a favorite record with the\n * given user_id and content_id and returns true if found, false otherwise.\n * It's useful for UI state (e.g., showing a filled vs. empty heart icon).\n *\n * @param userId - The authenticated user's UID\n * @param contentId - The Firestore document ID of the content\n * @returns true if the user has favorited this content, false otherwise or on error\n */\nexport async function isFavorite(\n  userId: string,\n  contentId: string\n): Promise<boolean> {\n  try {\n    const q = query(\n      favoritesCollection,\n      where('user_id', '==', userId),\n      where('content_id', '==', contentId)\n    );\n    const snapshot = await getDocs(q);\n\n    return !snapshot.empty;\n  } catch (error) {\n    console.error('Error checking favorite:', error);\n    return false;\n  }\n}\n\n// ==================== CONTENT RESOLVER ====================\n\n/**\n * Unified response type for resolved content across all feature types.\n *\n * This interface represents fully-hydrated content after fetching from the\n * appropriate source (Firestore table or feature repository). The contentType\n * discriminator is crucial for downstream code that may render or handle\n * different content types differently.\n *\n * course_code and session_code are present only for course_session content\n * and are used to display course badges and hierarchical context in the UI.\n */\nexport interface ResolvedContent {\n  id: string;\n  title: string;\n  thumbnail_url?: string;\n  duration_minutes: number;\n  content_type:\n    | 'meditation'\n    | 'nature_sound'\n    | 'bedtime_story'\n    | 'breathing_exercise'\n    | 'series_chapter'\n    | 'album_track'\n    | 'emergency'\n    | 'course_session'\n    | 'sleep_meditation';\n  course_code?: string;\n  session_code?: string;\n}\n\n/**\n * Resolves a piece of content by ID and type, returning a unified response object.\n *\n * This is the heart of Calmdemy's polymorphic content system. Because content\n * lives in many different Firestore collections and feature repositories, we\n * need a way to fetch any content by ID and type. This function implements the\n * polymorphic content resolution pattern using a discriminated union and switch\n * logic.\n *\n * The function has two strategies:\n *\n * 1. For cross-feature content (emergency, series_chapter, album_track, course_session,\n *    sleep_meditation), it imports and calls the appropriate feature repository\n *    function (e.g., getEmergencyMeditationById from meditateRepository). This keeps\n *    each feature's data model self-contained and avoids a Firestore fan-out query.\n *\n * 2. For direct Firestore content (meditation, bedtime_story, breathing_exercise,\n *    nature_sound), it queries the appropriate collection directly using doc() and\n *    getDoc(). The field names vary slightly across collections (e.g., some use\n *    'title', others 'name'), so the function handles both with a fallback pattern.\n *\n * @param contentId - The Firestore document ID or identifier within the feature\n * @param contentType - The discriminator indicating which collection/repository to query\n * @returns ResolvedContent with full metadata (title, thumbnail, duration) or null\n *          if the content is not found or an error occurs\n */\nexport async function getContentById(\n  contentId: string,\n  contentType:\n    | 'meditation'\n    | 'nature_sound'\n    | 'bedtime_story'\n    | 'breathing_exercise'\n    | 'series_chapter'\n    | 'album_track'\n    | 'emergency'\n    | 'course_session'\n    | 'sleep_meditation'\n): Promise<ResolvedContent | null> {\n  try {\n    // --- Strategy 1: Fetch from cross-feature repositories ---\n    // These content types live outside the home feature, managed by other\n    // feature repositories. We delegate to those repositories rather than\n    // trying to query Firestore directly, keeping each feature's schema private.\n\n    // Emergency meditations (meditateRepository)\n    if (contentType === 'emergency') {\n      const emergency = await getEmergencyMeditationById(contentId);\n      if (emergency) {\n        return {\n          id: contentId,\n          title: emergency.title,\n          thumbnail_url: emergency.thumbnailUrl,\n          duration_minutes: emergency.duration_minutes,\n          content_type: contentType,\n        };\n      }\n      return null;\n    }\n\n    // Series chapters (sleepRepository)\n    // Note: Series are fetched as a complete collection (getSeries), then we\n    // search for the chapter by ID within each series. This is efficient because\n    // series collections are typically small (~10s of series with ~10s of chapters each).\n    if (contentType === 'series_chapter') {\n      const allSeries = await getSeries();\n      for (const series of allSeries) {\n        const chapter = series.chapters?.find((c) => c.id === contentId);\n        if (chapter) {\n          return {\n            id: contentId,\n            // Composite title: show both the series name and chapter name for context\n            title: `${series.title}: ${chapter.title}`,\n            thumbnail_url: series.thumbnailUrl,\n            duration_minutes: chapter.duration_minutes,\n            content_type: contentType,\n          };\n        }\n      }\n      return null;\n    }\n\n    // Album tracks (musicRepository)\n    // Similar to series_chapter: fetch all albums and search within.\n    if (contentType === 'album_track') {\n      const allAlbums = await getAlbums();\n      for (const album of allAlbums) {\n        const track = album.tracks?.find((t) => t.id === contentId);\n        if (track) {\n          return {\n            id: contentId,\n            title: `${album.title}: ${track.title}`,\n            thumbnail_url: album.thumbnailUrl,\n            duration_minutes: track.duration_minutes,\n            content_type: contentType,\n          };\n        }\n      }\n      return null;\n    }\n\n    // Course sessions (meditateRepository)\n    // Courses contain sessions, so we fetch all courses and search for the session.\n    if (contentType === 'course_session') {\n      const allCourses = await getCourses();\n      for (const course of allCourses) {\n        const session = course.sessions?.find((s) => s.id === contentId);\n        if (session) {\n          return {\n            id: contentId,\n            title: session.title,\n            thumbnail_url: course.thumbnailUrl,\n            duration_minutes: session.duration_minutes,\n            content_type: contentType,\n            // Include course and session codes for hierarchical display in the UI\n            course_code: course.code,\n            session_code: session.code,\n          };\n        }\n      }\n      return null;\n    }\n\n    // Sleep meditations (sleepRepository)\n    if (contentType === 'sleep_meditation') {\n      const meditation = await getSleepMeditationById(contentId);\n      if (meditation) {\n        return {\n          id: contentId,\n          title: meditation.title,\n          thumbnail_url: meditation.thumbnailUrl,\n          duration_minutes: meditation.duration_minutes,\n          content_type: contentType,\n        };\n      }\n      return null;\n    }\n\n    // --- Strategy 2: Fetch directly from Firestore collections ---\n    // For other content types, we query Firestore directly. Each type maps\n    // to a specific collection name, following a naming convention.\n    let collectionName: string;\n    switch (contentType) {\n      case 'meditation':\n        collectionName = 'guided_meditations';\n        break;\n      case 'bedtime_story':\n        collectionName = 'bedtime_stories';\n        break;\n      case 'breathing_exercise':\n        collectionName = 'breathing_exercises';\n        break;\n      case 'nature_sound':\n        collectionName = 'sleep_sounds';\n        break;\n      default:\n        return null;\n    }\n\n    // Fetch the document and normalize its fields\n    const docRef = doc(db, collectionName, contentId);\n    const docSnap = await getDoc(docRef);\n\n    if (!docSnap.exists()) return null;\n\n    const data = docSnap.data();\n    return {\n      id: docSnap.id,\n      // Fallback pattern: some collections use 'title', others 'name'\n      title: data.title || data.name || 'Untitled',\n      // Fallback pattern: some collections use 'thumbnail_url', others 'thumbnailUrl'\n      thumbnail_url: data.thumbnail_url || data.thumbnailUrl,\n      duration_minutes: data.duration_minutes || 0,\n      content_type: contentType,\n    };\n  } catch (error) {\n    console.error('Error fetching content by id:', error);\n    return null;\n  }\n}\n\n/**\n * Fetches a user's favorite content with full details (title, thumbnail, duration).\n *\n * This is a high-level composition function that combines getUserFavorites()\n * (which fetches metadata about what the user favorited) with getContentById()\n * (which fetches the actual content). It's used to render the user's favorites\n * list on the profile screen, where we need both the favorited_at timestamp\n * and the full content details.\n *\n * Note the N+1 query pattern: for each favorite, we call getContentById(), which\n * may trigger additional Firestore queries or cross-feature repository calls.\n * For a user with 50 favorites, this could issue 50+ queries. In a production\n * app with thousands of users, consider implementing pagination or a React Query\n * hook to cache these results across the app. See src/shared/hooks/queries/ for\n * the caching pattern used elsewhere in Calmdemy.\n *\n * @param userId - The authenticated user's UID\n * @returns Array of ResolvedContent objects for all user favorites, or empty\n *          array on error. Order matches getUserFavorites() (newest first).\n */\nexport async function getFavoritesWithDetails(\n  userId: string\n): Promise<ResolvedContent[]> {\n  try {\n    // --- Phase 1: Fetch favorite metadata ---\n    const favorites = await getUserFavorites(userId);\n    const resolvedContent: ResolvedContent[] = [];\n\n    // --- Phase 2: Resolve each favorite to full content ---\n    for (const fav of favorites) {\n      const content = await getContentById(fav.content_id, fav.content_type);\n      if (content) {\n        resolvedContent.push(content);\n      }\n    }\n\n    return resolvedContent;\n  } catch (error) {\n    console.error('Error fetching favorites with details:', error);\n    return [];\n  }\n}\n\n// ==================== LISTENING HISTORY ====================\n\n/**\n * Records a piece of content that a user has played/completed.\n *\n * This function denormalizes content metadata (title, thumbnail, course codes)\n * into the listening_history collection for quick access and rendering. The idea\n * is that when displaying the user's recent activity, we don't want to re-fetch\n * the content just to show the title \u2014 it's already in the history record.\n *\n * The serverTimestamp() field (played_at) is set by Firestore's backend, ensuring\n * that timestamps are consistent and not subject to client clock skew.\n *\n * Optional fields (courseCode, sessionCode) are only included if the content is\n * a course session, allowing the UI to display course badges and module context.\n *\n * @param userId - The authenticated user's UID\n * @param contentId - The Firestore document ID of the content\n * @param contentType - The type discriminator (meditation, nature_sound, etc.)\n * @param contentTitle - Denormalized title for quick display (e.g., \"Morning Meditation\")\n * @param durationMinutes - Duration of the content in minutes\n * @param contentThumbnail - Optional URL/path to a thumbnail image\n * @param courseCode - Optional course code if this is a course session (e.g., \"CBT101\")\n * @param sessionCode - Optional session code if this is a course session (e.g., \"CBT101M1L\")\n * @returns The Firestore document ID of the newly created history entry, or empty\n *          string on error\n */\nexport async function addToListeningHistory(\n  userId: string,\n  contentId: string,\n  contentType:\n    | 'meditation'\n    | 'nature_sound'\n    | 'bedtime_story'\n    | 'breathing_exercise'\n    | 'series_chapter'\n    | 'album_track'\n    | 'emergency'\n    | 'course_session'\n    | 'sleep_meditation',\n  contentTitle: string,\n  durationMinutes: number,\n  contentThumbnail?: string,\n  courseCode?: string,\n  sessionCode?: string\n): Promise<string> {\n  try {\n    // --- Phase 1: Build the document object with required fields ---\n    // We start with the fields that every history entry has: user_id,\n    // content_id, content_type, and denormalized content metadata.\n    const docData: Record<string, any> = {\n      user_id: userId,\n      content_id: contentId,\n      content_type: contentType,\n      content_title: contentTitle,\n      content_thumbnail: contentThumbnail || null,\n      duration_minutes: durationMinutes,\n      played_at: serverTimestamp(),\n    };\n\n    // --- Phase 2: Conditionally add course/session codes ---\n    // If this is a course session, include the course and session codes.\n    // This allows the UI to display hierarchical context (e.g., \"CBT101 - Module 1\")\n    // without another Firestore fetch. This is the Denormalization pattern \u2014\n    // we trade some storage/update complexity for query speed.\n    if (courseCode) {\n      docData.course_code = courseCode;\n    }\n    if (sessionCode) {\n      docData.session_code = sessionCode;\n    }\n\n    // --- Phase 3: Write to Firestore and return the document ID ---\n    const docRef = await addDoc(listeningHistoryCollection, docData);\n    return docRef.id;\n  } catch (error) {\n    console.error('Error adding to listening history:', error);\n    return '';\n  }\n}\n\n/**\n * Fetches a user's listening history (recently played content), deduplicated and sorted.\n *\n * This function implements a few important patterns:\n *\n * 1. Timestamp Normalization: Firestore's serverTimestamp() returns a Timestamp\n *    object on the client, which we convert to ISO string for consistent handling.\n *\n * 2. Deduplication: A user might play the same meditation multiple times. The\n *    deduplication logic keeps only the most recent play of each content_id,\n *    using a Set to track which content IDs we've already seen (in sorted order).\n *\n * 3. Pagination: The maxLimit parameter allows the caller to get only the N most\n *    recent items (e.g., \"show the last 10 items\"). This is important for\n *    performance \u2014 the home screen doesn't need to display a user's entire\n *    3-year history, just the recent highlights.\n *\n * @param userId - The authenticated user's UID\n * @param maxLimit - Maximum number of history items to return (default: 10).\n *                   Useful for pagination in the UI.\n * @returns Array of ListeningHistoryItem objects, sorted by most recent first,\n *          deduplicated by content_id (keeping only the latest play), and limited\n *          to maxLimit items. Returns empty array on error.\n */\nexport async function getListeningHistory(\n  userId: string,\n  maxLimit = 10\n): Promise<ListeningHistoryItem[]> {\n  try {\n    // --- Phase 1: Fetch all listening history for this user ---\n    const q = query(listeningHistoryCollection, where('user_id', '==', userId));\n    const snapshot = await getDocs(q);\n\n    // --- Phase 2: Normalize Firestore Timestamp to ISO string ---\n    const items = snapshot.docs.map((docSnapshot) => {\n      const data = docSnapshot.data();\n      return {\n        id: docSnapshot.id,\n        ...data,\n        played_at:\n          data.played_at instanceof Timestamp\n            ? data.played_at.toDate().toISOString()\n            : new Date().toISOString(),\n      } as ListeningHistoryItem;\n    });\n\n    // --- Phase 3: Sort by most recent first ---\n    const sorted = items.sort(\n      (a, b) =>\n        new Date(b.played_at).getTime() -\n        new Date(a.played_at).getTime()\n    );\n\n    // --- Phase 4: Deduplicate by content_id (keep only latest play) ---\n    // This logic ensures that if a user played the same meditation on\n    // Jan 1, Feb 1, and Mar 1, we only include the Mar 1 entry. We use a Set\n    // to track which content_ids we've already included, and since the list is\n    // sorted by most recent first, the first occurrence of each content_id is\n    // always the most recent play of that content.\n    const seen = new Set<string>();\n    const deduplicated = sorted.filter((item) => {\n      if (seen.has(item.content_id)) return false;\n      seen.add(item.content_id);\n      return true;\n    });\n\n    // --- Phase 5: Return limited results ---\n    // Return only the top maxLimit items for performance and UI simplicity.\n    return deduplicated.slice(0, maxLimit);\n  } catch (error) {\n    console.error('Error fetching listening history:', error);\n    return [];\n  }\n}\n"}], "grading": {"eval_id": 2, "eval_name": "homerepository-data-layer", "expectations": [{"text": "Has a file-level header block explaining the Repository pattern", "passed": true, "evidence": "File contains structured header block with architectural explanation"}, {"text": "Mentions the Repository pattern by name", "passed": true, "evidence": "Repository pattern mentioned"}, {"text": "Explains the fallback logic in getTodayQuote as Graceful Degradation", "passed": true, "evidence": "Graceful Degradation explained"}, {"text": "Comments explain the content type switch/chain in getContentById as polymorphic dispatch", "passed": true, "evidence": "Polymorphic dispatch explained"}, {"text": "Explains the deduplication logic in getListeningHistory", "passed": true, "evidence": "Deduplication explained"}, {"text": "Comments explain the Firestore Timestamp to ISO string conversion", "passed": true, "evidence": "Timestamp conversion explained"}, {"text": "Has JSDoc on at least 5 exported functions", "passed": true, "evidence": "Found 8 JSDoc blocks"}, {"text": "Explains toggleFavorite's read-before-write or idempotent toggle pattern", "passed": true, "evidence": "Toggle pattern explained"}, {"text": "Functional code is unchanged \u2014 only comments added", "passed": true, "evidence": "Output is TypeScript/TSX file with code structure intact"}, {"text": "Comments use senior engineer voice with pattern vocabulary", "passed": true, "evidence": "Comments use design pattern vocabulary"}], "summary": {"passed": 10, "failed": 0, "total": 10, "pass_rate": 1.0}}}, {"id": "eval-2-homerepository-without_skill", "prompt": "Can you go through src/features/home/data/homeRepository.ts and add detailed comments? I need to understand the data layer and how Firestore queries work in this project.", "eval_id": 2, "outputs": [{"name": "homeRepository.ts", "type": "text", "content": "// ============================================================================\n// Home Repository - Data Layer for Home Feature\n// ============================================================================\n// This file handles all Firestore database operations for the home feature.\n// It provides functions to fetch daily quotes, manage user favorites, track\n// listening history, and resolve content details from various collections.\n//\n// Data Flow:\n// 1. Firestore Collections: daily_quotes, user_favorites, listening_history\n// 2. Related Repositories: meditateRepository, sleepRepository, musicRepository\n// 3. Return Types: DailyQuote, UserFavorite, ListeningHistoryItem, ResolvedContent\n// ============================================================================\n\n// Firebase imports for database operations and timestamp handling\nimport {\n  addDoc,        // Add a new document to a collection\n  collection,    // Get a reference to a Firestore collection\n  deleteDoc,     // Delete a document from a collection\n  doc,           // Get a reference to a specific document\n  getDoc,        // Fetch a single document by ID\n  getDocs,       // Fetch multiple documents matching a query\n  limit,         // Query constraint to limit results\n  query,         // Create a query with constraints (where, limit, etc.)\n  serverTimestamp, // Get current server time (use this for consistency)\n  Timestamp,     // Firestore timestamp type for date conversions\n  where,         // Query constraint to filter documents\n} from 'firebase/firestore';\n\n// Database instance configured in firebase.ts\nimport { db } from '../../../firebase';\n\n// Type definitions from the app's shared types\nimport {\n  DailyQuote,\n  ListeningHistoryItem,\n  UserFavorite,\n} from '../../../types';\n\n// Import functions from other feature repositories to resolve content details\n// This allows cross-feature content lookup (e.g., getting emergency meditation details)\nimport { getEmergencyMeditationById, getCourses } from '../../meditate/data/meditateRepository';\nimport { getSeries, getSleepMeditationById } from '../../sleep/data/sleepRepository';\nimport { getAlbums } from '../../music/data/musicRepository';\n\n// ============================================================================\n// FIRESTORE COLLECTION REFERENCES\n// ============================================================================\n// These collection() calls create references to Firestore collections.\n// Collections are like tables in a database - they hold documents.\n// Documents are JSON objects with a unique ID.\n\n// Example document in 'daily_quotes' collection:\n// {\n//   date: \"2024-01-15\",\n//   text: \"The only way...\",\n//   author: \"Unknown\"\n// }\nconst quotesCollection = collection(db, 'daily_quotes');\n\n// Example document in 'user_favorites' collection:\n// {\n//   user_id: \"user123\",\n//   content_id: \"meditation456\",\n//   content_type: \"meditation\",\n//   favorited_at: Timestamp(1234567890, 0)\n// }\nconst favoritesCollection = collection(db, 'user_favorites');\n\n// Example document in 'listening_history' collection:\n// {\n//   user_id: \"user123\",\n//   content_id: \"meditation456\",\n//   content_type: \"meditation\",\n//   content_title: \"Breathwork 101\",\n//   played_at: Timestamp(1234567890, 0),\n//   duration_minutes: 10\n// }\nconst listeningHistoryCollection = collection(db, 'listening_history');\n\n// ============================================================================\n// SECTION: DAILY QUOTES\n// ============================================================================\n// Manages fetching daily inspirational quotes for users.\n// Logic: Try to fetch today's quote, fallback to random quote if not found.\n\n/**\n * Fetches the daily quote for today.\n *\n * Query Strategy:\n * 1. Get today's date in YYYY-MM-DD format (e.g., \"2024-01-15\")\n * 2. Query the 'daily_quotes' collection for a document with matching date\n * 3. If found: return that quote\n * 4. If not found: fetch all quotes and return a random one\n * 5. If collection empty: return null\n *\n * Error Handling: Returns null if any error occurs during fetch\n *\n * @returns Promise<DailyQuote | null> The quote object with id and content,\n *                                       or null if no quotes found\n */\nexport async function getTodayQuote(): Promise<DailyQuote | null> {\n  try {\n    // Get today's date in YYYY-MM-DD format (e.g., \"2024-01-15\")\n    // ISO string format is \"2024-01-15T14:30:00.000Z\", split() takes the part before 'T'\n    const today = new Date().toISOString().split('T')[0];\n\n    // Create a query that filters the quotesCollection for:\n    // - document where 'date' field equals today's date (exact match)\n    // - and limit results to 1 document (optimization - we only need one)\n    const q = query(quotesCollection, where('date', '==', today), limit(1));\n\n    // Execute the query and get the results\n    const snapshot = await getDocs(q);\n\n    // Check if any documents matched the query\n    if (snapshot.empty) {\n      // No quote for today found, fetch all quotes as fallback\n      const allQuotesSnapshot = await getDocs(quotesCollection);\n\n      // If there are no quotes in the collection at all, return null\n      if (allQuotesSnapshot.empty) return null;\n\n      // Select a random quote from all available quotes\n      const randomIndex = Math.floor(\n        Math.random() * allQuotesSnapshot.docs.length\n      );\n\n      // Get the randomly selected document\n      const docSnapshot = allQuotesSnapshot.docs[randomIndex];\n\n      // Return the quote with its document ID merged into the data\n      return { id: docSnapshot.id, ...docSnapshot.data() } as DailyQuote;\n    }\n\n    // Today's quote was found - extract the first (and only) matching document\n    const docSnapshot = snapshot.docs[0];\n\n    // Return the quote with its document ID\n    // The spread operator (...) merges the document's fields with the id\n    return { id: docSnapshot.id, ...docSnapshot.data() } as DailyQuote;\n  } catch (error) {\n    // Log the error for debugging and return null to indicate failure\n    console.error('Error fetching daily quote:', error);\n    return null;\n  }\n}\n\n// ============================================================================\n// SECTION: FAVORITES\n// ============================================================================\n// Manages user favorite content (meditations, sounds, stories, etc.)\n// Supports: add, remove, check, and retrieve favorites\n\n/**\n * Fetches all favorites for a specific user.\n *\n * Query Strategy:\n * 1. Query 'user_favorites' collection for documents where user_id matches\n * 2. Convert Firestore Timestamps to ISO date strings for consistency\n * 3. Sort by most recently favorited first (descending by favorited_at)\n *\n * Timestamp Conversion:\n * - Firestore stores dates as Timestamp objects (server-side)\n * - We convert to JavaScript Date, then to ISO string for API responses\n * - If for some reason Timestamp isn't set, fallback to current time\n *\n * @param userId The user's unique identifier\n * @returns Promise<UserFavorite[]> Array of favorite items, sorted newest first,\n *                                   or empty array if error occurs\n */\nexport async function getUserFavorites(userId: string): Promise<UserFavorite[]> {\n  try {\n    // Create a query to find all documents where user_id matches the parameter\n    // where() is a filter constraint that limits results to matching documents\n    const q = query(favoritesCollection, where('user_id', '==', userId));\n\n    // Execute the query and retrieve all matching documents\n    const snapshot = await getDocs(q);\n\n    // Transform each raw Firestore document into a UserFavorite object\n    const items = snapshot.docs.map((docSnapshot) => {\n      const data = docSnapshot.data();\n\n      return {\n        // Include the document's unique ID\n        id: docSnapshot.id,\n        // Spread all fields from the document (user_id, content_id, content_type, etc.)\n        ...data,\n        // Handle favorited_at timestamp conversion\n        // Firestore Timestamp objects must be converted to ISO strings for JSON serialization\n        favorited_at:\n          data.favorited_at instanceof Timestamp\n            ? // If it's a Firestore Timestamp, convert to JavaScript Date, then to ISO string\n              data.favorited_at.toDate().toISOString()\n            : // Fallback: if timestamp is missing, use current time (shouldn't happen in normal flow)\n              new Date().toISOString(),\n      } as UserFavorite;\n    });\n\n    // Sort items by date, most recent first (descending order)\n    // This means the most recently favorited items appear at the top\n    return items.sort(\n      (a, b) =>\n        new Date(b.favorited_at).getTime() -\n        new Date(a.favorited_at).getTime()\n    );\n  } catch (error) {\n    // Log error and return empty array to prevent app crashes\n    console.error('Error fetching favorites:', error);\n    return [];\n  }\n}\n\n/**\n * Toggles favorite status for a piece of content.\n *\n * Logic: Check if already favorited\n * - If yes: delete the favorite (remove)\n * - If no: add a new favorite document (add)\n *\n * Query Strategy:\n * 1. Query for existing favorite matching user_id AND content_id\n * 2. If found: delete all matching documents\n * 3. If not found: add a new document with serverTimestamp()\n *\n * Return Value:\n * - true = content is now favorited (was added)\n * - false = content is now unfavorited (was removed)\n *\n * @param userId The user's unique identifier\n * @param contentId The content's unique identifier\n * @param contentType The type of content (meditation, story, sound, etc.)\n * @returns Promise<boolean> True if now favorited, false if now unfavorited\n */\nexport async function toggleFavorite(\n  userId: string,\n  contentId: string,\n  contentType:\n    | 'meditation'\n    | 'nature_sound'\n    | 'bedtime_story'\n    | 'breathing_exercise'\n    | 'series_chapter'\n    | 'album_track'\n    | 'emergency'\n    | 'course_session'\n    | 'sleep_meditation'\n): Promise<boolean> {\n  try {\n    // Create a query to find if this user already favorited this content\n    // We need BOTH conditions: user_id must match AND content_id must match\n    // This ensures we don't delete someone else's favorite of the same content\n    const q = query(\n      favoritesCollection,\n      where('user_id', '==', userId),\n      where('content_id', '==', contentId)\n    );\n\n    // Execute the query to see if an existing favorite exists\n    const existing = await getDocs(q);\n\n    // If the favorite already exists, remove it\n    if (!existing.empty) {\n      // Create a delete operation for each matching document\n      // In most cases there should only be 1, but we handle multiple for safety\n      const deletePromises = existing.docs.map((docSnapshot) =>\n        deleteDoc(docSnapshot.ref)\n      );\n\n      // Wait for all delete operations to complete\n      await Promise.all(deletePromises);\n\n      // Return false to indicate this content is now unfavorited\n      return false;\n    }\n\n    // Favorite doesn't exist, so add a new one\n    // addDoc() creates a new document with an auto-generated ID\n    await addDoc(favoritesCollection, {\n      // Store the user's ID for querying their favorites later\n      user_id: userId,\n      // Store the content's ID for checking if specific content is favorited\n      content_id: contentId,\n      // Store the content type to know what kind of content this is\n      content_type: contentType,\n      // Store the timestamp when this was favorited\n      // serverTimestamp() uses the server's current time, not the client's\n      // This prevents issues with incorrect client clocks\n      favorited_at: serverTimestamp(),\n    });\n\n    // Return true to indicate this content is now favorited\n    return true;\n  } catch (error) {\n    // Log error and return false (assume unfavorited on error to be safe)\n    console.error('Error toggling favorite:', error);\n    return false;\n  }\n}\n\n/**\n * Checks if a specific piece of content is favorited by a user.\n *\n * This is a simple boolean check - it doesn't return the full favorite object.\n * Useful for UI: determining whether to show a filled or empty heart icon.\n *\n * Query Strategy:\n * 1. Query for a document matching user_id AND content_id\n * 2. Return true if any match found, false if empty results\n *\n * @param userId The user's unique identifier\n * @param contentId The content's unique identifier\n * @returns Promise<boolean> True if favorited, false otherwise\n */\nexport async function isFavorite(\n  userId: string,\n  contentId: string\n): Promise<boolean> {\n  try {\n    // Query for an existing favorite with both user_id and content_id matching\n    const q = query(\n      favoritesCollection,\n      where('user_id', '==', userId),\n      where('content_id', '==', contentId)\n    );\n\n    // Execute the query\n    const snapshot = await getDocs(q);\n\n    // Return true if at least one document was found, false if no matches\n    return !snapshot.empty;\n  } catch (error) {\n    // Log error and return false (assume not favorited on error to be safe)\n    console.error('Error checking favorite:', error);\n    return false;\n  }\n}\n\n// ============================================================================\n// SECTION: CONTENT RESOLVER\n// ============================================================================\n// Resolves content details across different feature repositories.\n// This is the \"join\" layer that fetches metadata about favorited content.\n\n/**\n * Interface for resolved content details.\n * This is returned when we need to display information about favorited content.\n *\n * Why this exists:\n * - Content is stored in different Firestore collections (meditations, stories, etc.)\n * - Some content (courses, series, albums) is nested in different repositories\n * - This interface provides a unified response format\n *\n * Fields:\n * - id: the unique identifier for this content\n * - title: display name (e.g., \"Breathwork 101\" or \"Series Name: Chapter Name\")\n * - thumbnail_url: image URL for displaying content preview\n * - duration_minutes: how long the content is (for UI display or analytics)\n * - content_type: what kind of content (meditation, story, etc.)\n * - course_code: optional - for course sessions, which course they belong to\n * - session_code: optional - for course sessions, the session code\n */\nexport interface ResolvedContent {\n  id: string;\n  title: string;\n  thumbnail_url?: string;\n  duration_minutes: number;\n  content_type:\n    | 'meditation'\n    | 'nature_sound'\n    | 'bedtime_story'\n    | 'breathing_exercise'\n    | 'series_chapter'\n    | 'album_track'\n    | 'emergency'\n    | 'course_session'\n    | 'sleep_meditation';\n  course_code?: string;\n  session_code?: string;\n}\n\n/**\n * Resolves content details by ID and type.\n *\n * This function is a \"router\" that:\n * 1. Takes a content ID and type\n * 2. Knows where to find that content (which repository/collection)\n * 3. Fetches the full details\n * 4. Returns a standardized ResolvedContent object\n *\n * Architecture Note:\n * Different content types live in different places:\n * - 'emergency' -> meditateRepository (special fast-access meditations)\n * - 'series_chapter' -> sleepRepository (nested in series objects)\n * - 'album_track' -> musicRepository (nested in album objects)\n * - 'course_session' -> meditateRepository (nested in course objects)\n * - 'sleep_meditation' -> sleepRepository (specific sleep meditations)\n * - Others (meditation, story, sound, breathing) -> Direct Firestore collections\n *\n * @param contentId The ID of the content to fetch\n * @param contentType The type of content (determines where to look)\n * @returns Promise<ResolvedContent | null> Resolved content with full details,\n *                                            or null if not found\n */\nexport async function getContentById(\n  contentId: string,\n  contentType:\n    | 'meditation'\n    | 'nature_sound'\n    | 'bedtime_story'\n    | 'breathing_exercise'\n    | 'series_chapter'\n    | 'album_track'\n    | 'emergency'\n    | 'course_session'\n    | 'sleep_meditation'\n): Promise<ResolvedContent | null> {\n  try {\n    // ---- SPECIAL CONTENT TYPE: Emergency Meditation ----\n    // Emergency meditations are special - they're managed separately for fast access\n    if (contentType === 'emergency') {\n      // Fetch from meditateRepository instead of Firestore\n      const emergency = await getEmergencyMeditationById(contentId);\n\n      if (emergency) {\n        // Convert the emergency meditation to our standard format\n        return {\n          id: contentId,\n          title: emergency.title,\n          thumbnail_url: emergency.thumbnailUrl,\n          duration_minutes: emergency.duration_minutes,\n          content_type: contentType,\n        };\n      }\n\n      // Emergency meditation not found\n      return null;\n    }\n\n    // ---- NESTED CONTENT TYPE: Series Chapter ----\n    // Chapters are nested inside Series objects (not standalone documents)\n    // Logic: Fetch all series, search for our chapter ID\n    if (contentType === 'series_chapter') {\n      // Get all sleep series from sleepRepository\n      const allSeries = await getSeries();\n\n      // Loop through each series to find our chapter\n      for (const series of allSeries) {\n        // Check if this series has chapters and find matching chapter ID\n        const chapter = series.chapters?.find((c) => c.id === contentId);\n\n        if (chapter) {\n          // Found it! Return with formatted title (series + chapter)\n          return {\n            id: contentId,\n            // Combine series and chapter titles for full context\n            title: `${series.title}: ${chapter.title}`,\n            // Use the series' thumbnail (chapters don't have their own)\n            thumbnail_url: series.thumbnailUrl,\n            duration_minutes: chapter.duration_minutes,\n            content_type: contentType,\n          };\n        }\n      }\n\n      // Chapter not found in any series\n      return null;\n    }\n\n    // ---- NESTED CONTENT TYPE: Album Track ----\n    // Tracks are nested inside Album objects (not standalone documents)\n    // Logic: Fetch all albums, search for our track ID\n    if (contentType === 'album_track') {\n      // Get all albums from musicRepository\n      const allAlbums = await getAlbums();\n\n      // Loop through each album to find our track\n      for (const album of allAlbums) {\n        // Check if this album has tracks and find matching track ID\n        const track = album.tracks?.find((t) => t.id === contentId);\n\n        if (track) {\n          // Found it! Return with formatted title (album + track)\n          return {\n            id: contentId,\n            // Combine album and track titles for full context\n            title: `${album.title}: ${track.title}`,\n            // Use the album's thumbnail (tracks don't have their own)\n            thumbnail_url: album.thumbnailUrl,\n            duration_minutes: track.duration_minutes,\n            content_type: contentType,\n          };\n        }\n      }\n\n      // Track not found in any album\n      return null;\n    }\n\n    // ---- NESTED CONTENT TYPE: Course Session ----\n    // Sessions are nested inside Course objects (not standalone documents)\n    // Logic: Fetch all courses, search for our session ID\n    if (contentType === 'course_session') {\n      // Get all courses from meditateRepository\n      const allCourses = await getCourses();\n\n      // Loop through each course to find our session\n      for (const course of allCourses) {\n        // Check if this course has sessions and find matching session ID\n        const session = course.sessions?.find((s) => s.id === contentId);\n\n        if (session) {\n          // Found it! Return with session details + course context\n          return {\n            id: contentId,\n            // Just the session title (not combined like series/album)\n            title: session.title,\n            // Use the course's thumbnail (sessions don't have their own)\n            thumbnail_url: course.thumbnailUrl,\n            duration_minutes: session.duration_minutes,\n            content_type: contentType,\n            // Include course and session codes for tracking/analytics\n            course_code: course.code,\n            session_code: session.code,\n          };\n        }\n      }\n\n      // Session not found in any course\n      return null;\n    }\n\n    // ---- SPECIAL CONTENT TYPE: Sleep Meditation ----\n    // Sleep meditations are fetched from sleepRepository\n    if (contentType === 'sleep_meditation') {\n      // Fetch from sleepRepository instead of Firestore\n      const meditation = await getSleepMeditationById(contentId);\n\n      if (meditation) {\n        // Convert to our standard format\n        return {\n          id: contentId,\n          title: meditation.title,\n          thumbnail_url: meditation.thumbnailUrl,\n          duration_minutes: meditation.duration_minutes,\n          content_type: contentType,\n        };\n      }\n\n      // Sleep meditation not found\n      return null;\n    }\n\n    // ---- DIRECT FIRESTORE COLLECTIONS ----\n    // The remaining content types (meditation, story, sound, breathing exercise)\n    // are stored directly in Firestore collections.\n    // Map content type to the collection name in Firestore.\n\n    let collectionName: string;\n    switch (contentType) {\n      case 'meditation':\n        collectionName = 'guided_meditations';\n        break;\n      case 'bedtime_story':\n        collectionName = 'bedtime_stories';\n        break;\n      case 'breathing_exercise':\n        collectionName = 'breathing_exercises';\n        break;\n      case 'nature_sound':\n        // Note: nature_sound documents are stored in 'sleep_sounds' collection\n        collectionName = 'sleep_sounds';\n        break;\n      default:\n        // If content type doesn't match any case above, return null\n        // This shouldn't happen if contentType is properly validated\n        return null;\n    }\n\n    // Get a reference to a specific document by collection name and ID\n    // doc() creates a reference without fetching (no network call)\n    const docRef = doc(db, collectionName, contentId);\n\n    // Fetch the actual document from Firestore\n    // getDoc() makes the network call and returns the document\n    const docSnap = await getDoc(docRef);\n\n    // Check if the document exists\n    // A document might not exist if the ID is invalid or was deleted\n    if (!docSnap.exists()) return null;\n\n    // Extract the document's data\n    const data = docSnap.data();\n\n    // Return the content with standardized field names\n    // Note: Different collections may use different field names\n    // (e.g., 'title' vs 'name', 'thumbnail_url' vs 'thumbnailUrl')\n    // Use || (OR) to handle both naming conventions\n    return {\n      id: docSnap.id,\n      title: data.title || data.name || 'Untitled',\n      thumbnail_url: data.thumbnail_url || data.thumbnailUrl,\n      duration_minutes: data.duration_minutes || 0,\n      content_type: contentType,\n    };\n  } catch (error) {\n    // Log error and return null to indicate failure\n    console.error('Error fetching content by id:', error);\n    return null;\n  }\n}\n\n/**\n * Fetches all favorites for a user with full content details resolved.\n *\n * This is a convenience function that combines:\n * 1. getUserFavorites() - get the list of favorite items\n * 2. getContentById() - for each favorite, fetch its full details\n *\n * Use Case:\n * Display a user's favorites page with full metadata (thumbnails, titles, etc.)\n *\n * Performance Note:\n * This makes multiple sequential requests (one per favorite).\n * For N favorites, expect N+1 database calls.\n * Consider pagination or caching if you have many favorites.\n *\n * @param userId The user's unique identifier\n * @returns Promise<ResolvedContent[]> Array of resolved content objects,\n *                                      or empty array if error occurs\n */\nexport async function getFavoritesWithDetails(\n  userId: string\n): Promise<ResolvedContent[]> {\n  try {\n    // First, fetch all favorite records for this user\n    const favorites = await getUserFavorites(userId);\n\n    // Initialize array to store resolved content\n    const resolvedContent: ResolvedContent[] = [];\n\n    // For each favorite, fetch its full content details\n    for (const fav of favorites) {\n      // Call getContentById with the favorite's content ID and type\n      const content = await getContentById(fav.content_id, fav.content_type);\n\n      // Only add to results if content was successfully found\n      // (Some favorites might reference deleted content)\n      if (content) {\n        resolvedContent.push(content);\n      }\n    }\n\n    // Return all resolved favorites\n    return resolvedContent;\n  } catch (error) {\n    // Log error and return empty array to prevent app crashes\n    console.error('Error fetching favorites with details:', error);\n    return [];\n  }\n}\n\n// ============================================================================\n// SECTION: LISTENING HISTORY\n// ============================================================================\n// Tracks what content users have listened to, for recommendations and analytics.\n// Records are immutable - they're never updated, only added or removed.\n\n/**\n * Adds a record to a user's listening history.\n *\n * This function is called after a user finishes listening to content.\n * It creates a new immutable record in Firestore.\n *\n * Fields recorded:\n * - user_id: identify which user\n * - content_id & content_type: identify what was listened to\n * - content_title & content_thumbnail: metadata for display (denormalized for speed)\n * - duration_minutes: how long the content was\n * - played_at: server timestamp of when this happened\n * - course_code/session_code: optional, for course content tracking\n *\n * Why content_title and thumbnail are stored:\n * If the original content is deleted, we still have the user's history\n * with the correct title/image they saw when they played it.\n *\n * @param userId The user's unique identifier\n * @param contentId The content's unique identifier\n * @param contentType The type of content\n * @param contentTitle The display title (stored for history record)\n * @param durationMinutes How long the content is\n * @param contentThumbnail Optional image URL (stored for history record)\n * @param courseCode Optional course code (only for course_session type)\n * @param sessionCode Optional session code (only for course_session type)\n * @returns Promise<string> The newly created document ID, or empty string on error\n */\nexport async function addToListeningHistory(\n  userId: string,\n  contentId: string,\n  contentType:\n    | 'meditation'\n    | 'nature_sound'\n    | 'bedtime_story'\n    | 'breathing_exercise'\n    | 'series_chapter'\n    | 'album_track'\n    | 'emergency'\n    | 'course_session'\n    | 'sleep_meditation',\n  contentTitle: string,\n  durationMinutes: number,\n  contentThumbnail?: string,\n  courseCode?: string,\n  sessionCode?: string\n): Promise<string> {\n  try {\n    // Build the document data to store in Firestore\n    // Using Record<string, any> because we conditionally add course_code/session_code\n    const docData: Record<string, any> = {\n      // User identifier for querying their history later\n      user_id: userId,\n      // Content identifiers\n      content_id: contentId,\n      content_type: contentType,\n      // Metadata about the content (stored for history integrity)\n      content_title: contentTitle,\n      content_thumbnail: contentThumbnail || null,\n      duration_minutes: durationMinutes,\n      // Server timestamp - when this listening session was recorded\n      // Using serverTimestamp() ensures consistency regardless of client clock\n      played_at: serverTimestamp(),\n    };\n\n    // Conditionally add course_code if provided (for course sessions only)\n    if (courseCode) {\n      docData.course_code = courseCode;\n    }\n\n    // Conditionally add session_code if provided (for course sessions only)\n    if (sessionCode) {\n      docData.session_code = sessionCode;\n    }\n\n    // Add the new document to the listening_history collection\n    // addDoc() automatically generates a unique document ID\n    const docRef = await addDoc(listeningHistoryCollection, docData);\n\n    // Return the auto-generated document ID\n    // Useful if the caller needs to reference this history record later\n    return docRef.id;\n  } catch (error) {\n    // Log error and return empty string to indicate failure\n    console.error('Error adding to listening history:', error);\n    return '';\n  }\n}\n\n/**\n * Fetches a user's listening history.\n *\n * Retrieval Process:\n * 1. Query all listening_history documents for this user\n * 2. Convert Firestore Timestamps to ISO strings\n * 3. Sort by most recent first (descending by played_at)\n * 4. Deduplicate: if same content appears multiple times, keep only the latest\n * 5. Limit to maxLimit items (default 10)\n *\n * Deduplication Logic:\n * Users might listen to the same content multiple times.\n * For \"recently played\" display, we typically want each content once.\n * We keep the MOST RECENT play of each content_id.\n *\n * @param userId The user's unique identifier\n * @param maxLimit Maximum number of history items to return (default: 10)\n * @returns Promise<ListeningHistoryItem[]> Array of history items, sorted\n *                                           newest first, or empty array on error\n */\nexport async function getListeningHistory(\n  userId: string,\n  maxLimit = 10\n): Promise<ListeningHistoryItem[]> {\n  try {\n    // Create a query to find all documents where user_id matches\n    const q = query(listeningHistoryCollection, where('user_id', '==', userId));\n\n    // Execute the query and fetch all matching documents\n    const snapshot = await getDocs(q);\n\n    // Transform each raw Firestore document into a ListeningHistoryItem\n    const items = snapshot.docs.map((docSnapshot) => {\n      const data = docSnapshot.data();\n\n      return {\n        // Include the document's unique ID\n        id: docSnapshot.id,\n        // Spread all fields from the document\n        ...data,\n        // Handle played_at timestamp conversion\n        // Convert Firestore Timestamp to ISO string for JSON serialization\n        played_at:\n          data.played_at instanceof Timestamp\n            ? // Convert Firestore Timestamp to JavaScript Date, then to ISO string\n              data.played_at.toDate().toISOString()\n            : // Fallback if timestamp is missing (shouldn't happen in normal flow)\n              new Date().toISOString(),\n      } as ListeningHistoryItem;\n    });\n\n    // Sort by date, most recent first (descending order)\n    // This means the most recently played items appear first\n    const sorted = items.sort(\n      (a, b) =>\n        new Date(b.played_at).getTime() -\n        new Date(a.played_at).getTime()\n    );\n\n    // Deduplication: remove duplicate content_id entries\n    // Use a Set to track which content_id values we've already seen\n    const seen = new Set<string>();\n\n    // Filter the sorted array, keeping only the first occurrence of each content_id\n    const deduplicated = sorted.filter((item) => {\n      // If we've already seen this content_id, skip it (filter out)\n      if (seen.has(item.content_id)) return false;\n\n      // Haven't seen this content_id before, mark it as seen\n      seen.add(item.content_id);\n\n      // Keep this item (filter passes)\n      return true;\n    });\n\n    // Return only the first maxLimit items\n    // This respects the caller's limit parameter\n    return deduplicated.slice(0, maxLimit);\n  } catch (error) {\n    // Log error and return empty array to prevent app crashes\n    console.error('Error fetching listening history:', error);\n    return [];\n  }\n}\n"}], "grading": {"eval_id": 2, "eval_name": "homerepository-data-layer", "expectations": [{"text": "Has a file-level header block explaining the Repository pattern", "passed": false, "evidence": "No structured header block found"}, {"text": "Mentions the Repository pattern by name", "passed": false, "evidence": "Not mentioned"}, {"text": "Explains the fallback logic in getTodayQuote as Graceful Degradation", "passed": true, "evidence": "Graceful Degradation explained"}, {"text": "Comments explain the content type switch/chain in getContentById as polymorphic dispatch", "passed": true, "evidence": "Polymorphic dispatch explained"}, {"text": "Explains the deduplication logic in getListeningHistory", "passed": true, "evidence": "Deduplication explained"}, {"text": "Comments explain the Firestore Timestamp to ISO string conversion", "passed": true, "evidence": "Timestamp conversion explained"}, {"text": "Has JSDoc on at least 5 exported functions", "passed": true, "evidence": "Found 8 JSDoc blocks"}, {"text": "Explains toggleFavorite's read-before-write or idempotent toggle pattern", "passed": false, "evidence": "Not found"}, {"text": "Functional code is unchanged \u2014 only comments added", "passed": true, "evidence": "Output is TypeScript/TSX file with code structure intact"}, {"text": "Comments use senior engineer voice with pattern vocabulary", "passed": true, "evidence": "Comments use design pattern vocabulary"}], "summary": {"passed": 7, "failed": 3, "total": 10, "pass_rate": 0.7}}}], "previous_feedback": {}, "previous_outputs": {}, "benchmark": {"metadata": {"skill_name": "comment-writer", "skill_path": "/tmp/comment-writer/", "executor_model": "claude-sonnet-4-6", "analyzer_model": "claude-opus-4-6", "timestamp": "2026-04-03T08:06:00Z", "evals_run": ["eval-0-authcontext", "eval-1-musicviewmodel", "eval-2-homerepository"], "runs_per_configuration": 1}, "runs": [{"eval_id": 0, "eval_name": "authcontext-provider-pattern", "with_skill": {"pass_rate": 1.0, "passed": 10, "failed": 0, "total": 10, "time_seconds": 58.5, "tokens": 45896}, "without_skill": {"pass_rate": 0.5, "passed": 5, "failed": 5, "total": 10, "time_seconds": 34.1, "tokens": 38801}}, {"eval_id": 1, "eval_name": "musicviewmodel-mvvm-pattern", "with_skill": {"pass_rate": 1.0, "passed": 9, "failed": 0, "total": 9, "time_seconds": 51.2, "tokens": 51061}, "without_skill": {"pass_rate": 0.78, "passed": 7, "failed": 2, "total": 9, "time_seconds": 22.9, "tokens": 35410}}, {"eval_id": 2, "eval_name": "homerepository-data-layer", "with_skill": {"pass_rate": 1.0, "passed": 10, "failed": 0, "total": 10, "time_seconds": 110.0, "tokens": 53096}, "without_skill": {"pass_rate": 0.7, "passed": 7, "failed": 3, "total": 10, "time_seconds": 841.8, "tokens": 47223}}], "run_summary": {"with_skill": {"mean_pass_rate": 1.0, "stddev_pass_rate": 0.0, "mean_time_seconds": 73.2, "mean_tokens": 50018}, "without_skill": {"mean_pass_rate": 0.66, "stddev_pass_rate": 0.12, "mean_time_seconds": 299.6, "mean_tokens": 40478}, "delta": {"pass_rate": "+0.34", "time_seconds": "-226.4", "tokens": "+9540"}}, "notes": ["With-skill achieves 100% pass rate across all 3 evals vs 66% baseline average.", "The skill's main advantage is in pattern naming: the baseline rarely names specific design patterns (Provider, Observer, Factory Method, Gatekeeper, etc.).", "Token usage is ~24% higher with skill, which is expected since the skill reads neighbor files for context.", "Baseline eval-2 had an anomalously long runtime (841s) likely due to the large file size."]}};
+
+    // ---- State ----
+    let feedbackMap = {};  // run_id -> feedback text
+    let currentIndex = 0;
+    let visitedRuns = new Set();
+
+    // ---- Init ----
+    async function init() {
+      // Load saved feedback from server — but only if this isn't a fresh
+      // iteration (indicated by previous_feedback being present). When
+      // previous feedback exists, the feedback.json on disk is stale from
+      // the prior iteration and should not pre-fill the textareas.
+      const hasPrevious = Object.keys(EMBEDDED_DATA.previous_feedback || {}).length > 0
+        || Object.keys(EMBEDDED_DATA.previous_outputs || {}).length > 0;
+      if (!hasPrevious) {
+        try {
+          const resp = await fetch("/api/feedback");
+          const data = await resp.json();
+          if (data.reviews) {
+            for (const r of data.reviews) feedbackMap[r.run_id] = r.feedback;
+          }
+        } catch { /* first run, no feedback yet */ }
+      }
+
+      document.getElementById("skill-name").textContent = EMBEDDED_DATA.skill_name;
+      showRun(0);
+
+      // Wire up feedback auto-save
+      const textarea = document.getElementById("feedback");
+      let saveTimeout = null;
+      textarea.addEventListener("input", () => {
+        clearTimeout(saveTimeout);
+        document.getElementById("feedback-status").textContent = "";
+        saveTimeout = setTimeout(() => saveCurrentFeedback(), 800);
+      });
+    }
+
+    // ---- Navigation ----
+    function navigate(delta) {
+      const newIndex = currentIndex + delta;
+      if (newIndex >= 0 && newIndex < EMBEDDED_DATA.runs.length) {
+        saveCurrentFeedback();
+        showRun(newIndex);
+      }
+    }
+
+    function updateNavButtons() {
+      document.getElementById("prev-btn").disabled = currentIndex === 0;
+      document.getElementById("next-btn").disabled =
+        currentIndex === EMBEDDED_DATA.runs.length - 1;
+    }
+
+    // ---- Show a run ----
+    function showRun(index) {
+      currentIndex = index;
+      const run = EMBEDDED_DATA.runs[index];
+
+      // Progress
+      document.getElementById("progress").textContent =
+        `${index + 1} of ${EMBEDDED_DATA.runs.length}`;
+
+      // Prompt
+      document.getElementById("prompt-text").textContent = run.prompt;
+
+      // Config badge
+      const badge = document.getElementById("config-badge");
+      const configMatch = run.id.match(/(with_skill|without_skill|new_skill|old_skill)/);
+      if (configMatch) {
+        const config = configMatch[1];
+        const isBaseline = config === "without_skill" || config === "old_skill";
+        badge.textContent = config.replace(/_/g, " ");
+        badge.className = "config-badge " + (isBaseline ? "config-baseline" : "config-primary");
+        badge.style.display = "inline-block";
+      } else {
+        badge.style.display = "none";
+      }
+
+      // Outputs
+      renderOutputs(run);
+
+      // Previous outputs
+      renderPrevOutputs(run);
+
+      // Grades
+      renderGrades(run);
+
+      // Previous feedback
+      const prevFb = (EMBEDDED_DATA.previous_feedback || {})[run.id];
+      const prevEl = document.getElementById("prev-feedback");
+      if (prevFb) {
+        document.getElementById("prev-feedback-text").textContent = prevFb;
+        prevEl.style.display = "block";
+      } else {
+        prevEl.style.display = "none";
+      }
+
+      // Feedback
+      document.getElementById("feedback").value = feedbackMap[run.id] || "";
+      document.getElementById("feedback-status").textContent = "";
+
+      updateNavButtons();
+
+      // Track visited runs and promote done button when all visited
+      visitedRuns.add(index);
+      const doneBtn = document.getElementById("done-btn");
+      if (visitedRuns.size >= EMBEDDED_DATA.runs.length) {
+        doneBtn.classList.add("ready");
+      }
+
+      // Scroll main content to top
+      document.querySelector(".main").scrollTop = 0;
+    }
+
+    // ---- Render outputs ----
+    function renderOutputs(run) {
+      const container = document.getElementById("outputs-body");
+      container.innerHTML = "";
+
+      const outputs = run.outputs || [];
+      if (outputs.length === 0) {
+        container.innerHTML = '<div class="empty-state">No output files</div>';
+        return;
+      }
+
+      for (const file of outputs) {
+        const fileDiv = document.createElement("div");
+        fileDiv.className = "output-file";
+
+        // Always show file header with download link
+        const header = document.createElement("div");
+        header.className = "output-file-header";
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = file.name;
+        header.appendChild(nameSpan);
+        const dlBtn = document.createElement("a");
+        dlBtn.className = "dl-btn";
+        dlBtn.textContent = "Download";
+        dlBtn.download = file.name;
+        dlBtn.href = getDownloadUri(file);
+        header.appendChild(dlBtn);
+        fileDiv.appendChild(header);
+
+        const content = document.createElement("div");
+        content.className = "output-file-content";
+
+        if (file.type === "text") {
+          const pre = document.createElement("pre");
+          pre.textContent = file.content;
+          content.appendChild(pre);
+        } else if (file.type === "image") {
+          const img = document.createElement("img");
+          img.src = file.data_uri;
+          img.alt = file.name;
+          content.appendChild(img);
+        } else if (file.type === "pdf") {
+          const iframe = document.createElement("iframe");
+          iframe.src = file.data_uri;
+          content.appendChild(iframe);
+        } else if (file.type === "xlsx") {
+          renderXlsx(content, file.data_b64);
+        } else if (file.type === "binary") {
+          const a = document.createElement("a");
+          a.className = "download-link";
+          a.href = file.data_uri;
+          a.download = file.name;
+          a.textContent = "Download " + file.name;
+          content.appendChild(a);
+        } else if (file.type === "error") {
+          const pre = document.createElement("pre");
+          pre.textContent = file.content;
+          pre.style.color = "var(--red)";
+          content.appendChild(pre);
+        }
+
+        fileDiv.appendChild(content);
+        container.appendChild(fileDiv);
+      }
+    }
+
+    // ---- XLSX rendering via SheetJS ----
+    function renderXlsx(container, b64Data) {
+      try {
+        const raw = Uint8Array.from(atob(b64Data), c => c.charCodeAt(0));
+        const wb = XLSX.read(raw, { type: "array" });
+
+        for (let i = 0; i < wb.SheetNames.length; i++) {
+          const sheetName = wb.SheetNames[i];
+          const ws = wb.Sheets[sheetName];
+
+          if (wb.SheetNames.length > 1) {
+            const sheetLabel = document.createElement("div");
+            sheetLabel.style.cssText =
+              "font-weight:600; font-size:0.8rem; color:#b0aea5; margin-top:0.5rem; margin-bottom:0.25rem;";
+            sheetLabel.textContent = "Sheet: " + sheetName;
+            container.appendChild(sheetLabel);
+          }
+
+          const htmlStr = XLSX.utils.sheet_to_html(ws, { editable: false });
+          const wrapper = document.createElement("div");
+          wrapper.innerHTML = htmlStr;
+          container.appendChild(wrapper);
+        }
+      } catch (err) {
+        container.textContent = "Error rendering spreadsheet: " + err.message;
+      }
+    }
+
+    // ---- Grades ----
+    function renderGrades(run) {
+      const section = document.getElementById("grades-section");
+      const content = document.getElementById("grades-content");
+
+      if (!run.grading) {
+        section.style.display = "none";
+        return;
+      }
+
+      const grading = run.grading;
+      section.style.display = "block";
+      // Reset to collapsed
+      content.classList.remove("open");
+      document.getElementById("grades-arrow").classList.remove("open");
+
+      const summary = grading.summary || {};
+      const expectations = grading.expectations || [];
+
+      let html = '<div style="padding: 1rem;">';
+
+      // Summary line
+      const passRate = summary.pass_rate != null
+        ? Math.round(summary.pass_rate * 100) + "%"
+        : "?";
+      const badgeClass = summary.pass_rate >= 0.8 ? "grade-pass" : summary.pass_rate >= 0.5 ? "" : "grade-fail";
+      html += '<div class="grades-summary">';
+      html += '<span class="grade-badge ' + badgeClass + '">' + passRate + '</span>';
+      html += '<span>' + (summary.passed || 0) + ' passed, ' + (summary.failed || 0) + ' failed of ' + (summary.total || 0) + '</span>';
+      html += '</div>';
+
+      // Assertions list
+      html += '<ul class="assertion-list">';
+      for (const exp of expectations) {
+        const statusClass = exp.passed ? "pass" : "fail";
+        const statusIcon = exp.passed ? "\u2713" : "\u2717";
+        html += '<li class="assertion-item">';
+        html += '<span class="assertion-status ' + statusClass + '">' + statusIcon + '</span>';
+        html += '<span>' + escapeHtml(exp.text) + '</span>';
+        if (exp.evidence) {
+          html += '<div class="assertion-evidence">' + escapeHtml(exp.evidence) + '</div>';
+        }
+        html += '</li>';
+      }
+      html += '</ul>';
+
+      html += '</div>';
+      content.innerHTML = html;
+    }
+
+    function toggleGrades() {
+      const content = document.getElementById("grades-content");
+      const arrow = document.getElementById("grades-arrow");
+      content.classList.toggle("open");
+      arrow.classList.toggle("open");
+    }
+
+    // ---- Previous outputs (collapsible) ----
+    function renderPrevOutputs(run) {
+      const section = document.getElementById("prev-outputs-section");
+      const content = document.getElementById("prev-outputs-content");
+      const prevOutputs = (EMBEDDED_DATA.previous_outputs || {})[run.id];
+
+      if (!prevOutputs || prevOutputs.length === 0) {
+        section.style.display = "none";
+        return;
+      }
+
+      section.style.display = "block";
+      // Reset to collapsed
+      content.classList.remove("open");
+      document.getElementById("prev-outputs-arrow").classList.remove("open");
+
+      // Render the files into the content area
+      content.innerHTML = "";
+      const wrapper = document.createElement("div");
+      wrapper.style.padding = "1rem";
+
+      for (const file of prevOutputs) {
+        const fileDiv = document.createElement("div");
+        fileDiv.className = "output-file";
+
+        const header = document.createElement("div");
+        header.className = "output-file-header";
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = file.name;
+        header.appendChild(nameSpan);
+        const dlBtn = document.createElement("a");
+        dlBtn.className = "dl-btn";
+        dlBtn.textContent = "Download";
+        dlBtn.download = file.name;
+        dlBtn.href = getDownloadUri(file);
+        header.appendChild(dlBtn);
+        fileDiv.appendChild(header);
+
+        const fc = document.createElement("div");
+        fc.className = "output-file-content";
+
+        if (file.type === "text") {
+          const pre = document.createElement("pre");
+          pre.textContent = file.content;
+          fc.appendChild(pre);
+        } else if (file.type === "image") {
+          const img = document.createElement("img");
+          img.src = file.data_uri;
+          img.alt = file.name;
+          fc.appendChild(img);
+        } else if (file.type === "pdf") {
+          const iframe = document.createElement("iframe");
+          iframe.src = file.data_uri;
+          fc.appendChild(iframe);
+        } else if (file.type === "xlsx") {
+          renderXlsx(fc, file.data_b64);
+        } else if (file.type === "binary") {
+          const a = document.createElement("a");
+          a.className = "download-link";
+          a.href = file.data_uri;
+          a.download = file.name;
+          a.textContent = "Download " + file.name;
+          fc.appendChild(a);
+        }
+
+        fileDiv.appendChild(fc);
+        wrapper.appendChild(fileDiv);
+      }
+
+      content.appendChild(wrapper);
+    }
+
+    function togglePrevOutputs() {
+      const content = document.getElementById("prev-outputs-content");
+      const arrow = document.getElementById("prev-outputs-arrow");
+      content.classList.toggle("open");
+      arrow.classList.toggle("open");
+    }
+
+    // ---- Feedback (saved to server -> feedback.json) ----
+    function saveCurrentFeedback() {
+      const run = EMBEDDED_DATA.runs[currentIndex];
+      const text = document.getElementById("feedback").value;
+
+      if (text.trim() === "") {
+        delete feedbackMap[run.id];
+      } else {
+        feedbackMap[run.id] = text;
+      }
+
+      // Build reviews array from map
+      const reviews = [];
+      for (const [run_id, feedback] of Object.entries(feedbackMap)) {
+        if (feedback.trim()) {
+          reviews.push({ run_id, feedback, timestamp: new Date().toISOString() });
+        }
+      }
+
+      fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reviews, status: "in_progress" }),
+      }).then(() => {
+        document.getElementById("feedback-status").textContent = "Saved";
+      }).catch(() => {
+        // Static mode or server unavailable — no-op on auto-save,
+        // feedback will be downloaded on final submit
+        document.getElementById("feedback-status").textContent = "Will download on submit";
+      });
+    }
+
+    // ---- Done ----
+    function showDoneDialog() {
+      // Save current textarea to feedbackMap (but don't POST yet)
+      const run = EMBEDDED_DATA.runs[currentIndex];
+      const text = document.getElementById("feedback").value;
+      if (text.trim() === "") {
+        delete feedbackMap[run.id];
+      } else {
+        feedbackMap[run.id] = text;
+      }
+
+      // POST once with status: complete — include ALL runs so the model
+      // can distinguish "no feedback" (looks good) from "not reviewed"
+      const reviews = [];
+      const ts = new Date().toISOString();
+      for (const r of EMBEDDED_DATA.runs) {
+        reviews.push({ run_id: r.id, feedback: feedbackMap[r.id] || "", timestamp: ts });
+      }
+      const payload = JSON.stringify({ reviews, status: "complete" }, null, 2);
+      fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+      }).then(() => {
+        document.getElementById("done-overlay").classList.add("visible");
+      }).catch(() => {
+        // Server not available (static mode) — download as file
+        const blob = new Blob([payload], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "feedback.json";
+        a.click();
+        URL.revokeObjectURL(url);
+        document.getElementById("done-overlay").classList.add("visible");
+      });
+    }
+
+    function closeDoneDialog() {
+      // Reset status back to in_progress
+      saveCurrentFeedback();
+      document.getElementById("done-overlay").classList.remove("visible");
+    }
+
+    // ---- Toast ----
+    function showToast(message) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.classList.add("visible");
+      setTimeout(() => toast.classList.remove("visible"), 2000);
+    }
+
+    // ---- Keyboard nav ----
+    document.addEventListener("keydown", (e) => {
+      // Don't capture when typing in textarea
+      if (e.target.tagName === "TEXTAREA") return;
+
+      if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        e.preventDefault();
+        navigate(-1);
+      } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        e.preventDefault();
+        navigate(1);
+      }
+    });
+
+    // ---- Util ----
+    function getDownloadUri(file) {
+      if (file.data_uri) return file.data_uri;
+      if (file.data_b64) return "data:application/octet-stream;base64," + file.data_b64;
+      if (file.type === "text") return "data:text/plain;charset=utf-8," + encodeURIComponent(file.content);
+      return "#";
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement("div");
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // ---- View switching ----
+    function switchView(view) {
+      document.querySelectorAll(".view-tab").forEach(t => t.classList.remove("active"));
+      document.querySelectorAll(".view-panel").forEach(p => p.classList.remove("active"));
+      document.querySelector(`[onclick="switchView('${view}')"]`).classList.add("active");
+      document.getElementById("panel-" + view).classList.add("active");
+    }
+
+    // ---- Benchmark rendering ----
+    function renderBenchmark() {
+      const data = EMBEDDED_DATA.benchmark;
+      if (!data) return;
+
+      // Show the tabs
+      document.getElementById("view-tabs").style.display = "flex";
+
+      const container = document.getElementById("benchmark-content");
+      const summary = data.run_summary || {};
+      const metadata = data.metadata || {};
+      const notes = data.notes || [];
+
+      let html = "";
+
+      // Header
+      html += "<h2 style='font-family: Poppins, sans-serif; margin-bottom: 0.5rem;'>Benchmark Results</h2>";
+      html += "<p style='color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1.25rem;'>";
+      if (metadata.skill_name) html += "<strong>" + escapeHtml(metadata.skill_name) + "</strong> &mdash; ";
+      if (metadata.timestamp) html += metadata.timestamp + " &mdash; ";
+      if (metadata.evals_run) html += "Evals: " + metadata.evals_run.join(", ") + " &mdash; ";
+      html += (metadata.runs_per_configuration || "?") + " runs per configuration";
+      html += "</p>";
+
+      // Summary table
+      html += '<table class="benchmark-table">';
+
+      function fmtStat(stat, pct) {
+        if (!stat) return "—";
+        const suffix = pct ? "%" : "";
+        const m = pct ? (stat.mean * 100).toFixed(0) : stat.mean.toFixed(1);
+        const s = pct ? (stat.stddev * 100).toFixed(0) : stat.stddev.toFixed(1);
+        return m + suffix + " ± " + s + suffix;
+      }
+
+      function deltaClass(val) {
+        if (!val) return "";
+        const n = parseFloat(val);
+        if (n > 0) return "benchmark-delta-positive";
+        if (n < 0) return "benchmark-delta-negative";
+        return "";
+      }
+
+      // Discover config names dynamically (everything except "delta")
+      const configs = Object.keys(summary).filter(k => k !== "delta");
+      const configA = configs[0] || "config_a";
+      const configB = configs[1] || "config_b";
+      const labelA = configA.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+      const labelB = configB.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+      const a = summary[configA] || {};
+      const b = summary[configB] || {};
+      const delta = summary.delta || {};
+
+      html += "<thead><tr><th>Metric</th><th>" + escapeHtml(labelA) + "</th><th>" + escapeHtml(labelB) + "</th><th>Delta</th></tr></thead>";
+      html += "<tbody>";
+
+      html += "<tr><td><strong>Pass Rate</strong></td>";
+      html += "<td>" + fmtStat(a.pass_rate, true) + "</td>";
+      html += "<td>" + fmtStat(b.pass_rate, true) + "</td>";
+      html += '<td class="' + deltaClass(delta.pass_rate) + '">' + (delta.pass_rate || "—") + "</td></tr>";
+
+      // Time (only show row if data exists)
+      if (a.time_seconds || b.time_seconds) {
+        html += "<tr><td><strong>Time (s)</strong></td>";
+        html += "<td>" + fmtStat(a.time_seconds, false) + "</td>";
+        html += "<td>" + fmtStat(b.time_seconds, false) + "</td>";
+        html += '<td class="' + deltaClass(delta.time_seconds) + '">' + (delta.time_seconds ? delta.time_seconds + "s" : "—") + "</td></tr>";
+      }
+
+      // Tokens (only show row if data exists)
+      if (a.tokens || b.tokens) {
+        html += "<tr><td><strong>Tokens</strong></td>";
+        html += "<td>" + fmtStat(a.tokens, false) + "</td>";
+        html += "<td>" + fmtStat(b.tokens, false) + "</td>";
+        html += '<td class="' + deltaClass(delta.tokens) + '">' + (delta.tokens || "—") + "</td></tr>";
+      }
+
+      html += "</tbody></table>";
+
+      // Per-eval breakdown (if runs data available)
+      const runs = data.runs || [];
+      if (runs.length > 0) {
+        const evalIds = [...new Set(runs.map(r => r.eval_id))].sort((a, b) => a - b);
+
+        html += "<h3 style='font-family: Poppins, sans-serif; margin-bottom: 0.75rem;'>Per-Eval Breakdown</h3>";
+
+        const hasTime = runs.some(r => r.result && r.result.time_seconds != null);
+        const hasErrors = runs.some(r => r.result && r.result.errors > 0);
+
+        for (const evalId of evalIds) {
+          const evalRuns = runs.filter(r => r.eval_id === evalId);
+          const evalName = evalRuns[0] && evalRuns[0].eval_name ? evalRuns[0].eval_name : "Eval " + evalId;
+
+          html += "<h4 style='font-family: Poppins, sans-serif; margin: 1rem 0 0.5rem; color: var(--text);'>" + escapeHtml(evalName) + "</h4>";
+          html += '<table class="benchmark-table">';
+          html += "<thead><tr><th>Config</th><th>Run</th><th>Pass Rate</th>";
+          if (hasTime) html += "<th>Time (s)</th>";
+          if (hasErrors) html += "<th>Crashes During Execution</th>";
+          html += "</tr></thead>";
+          html += "<tbody>";
+
+          // Group by config and render with average rows
+          const configGroups = [...new Set(evalRuns.map(r => r.configuration))];
+          for (let ci = 0; ci < configGroups.length; ci++) {
+            const config = configGroups[ci];
+            const configRuns = evalRuns.filter(r => r.configuration === config);
+            if (configRuns.length === 0) continue;
+
+            const rowClass = ci === 0 ? "benchmark-row-with" : "benchmark-row-without";
+            const configLabel = config.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+
+            for (const run of configRuns) {
+              const r = run.result || {};
+              const prClass = r.pass_rate >= 0.8 ? "benchmark-delta-positive" : r.pass_rate < 0.5 ? "benchmark-delta-negative" : "";
+              html += '<tr class="' + rowClass + '">';
+              html += "<td>" + configLabel + "</td>";
+              html += "<td>" + run.run_number + "</td>";
+              html += '<td class="' + prClass + '">' + ((r.pass_rate || 0) * 100).toFixed(0) + "% (" + (r.passed || 0) + "/" + (r.total || 0) + ")</td>";
+              if (hasTime) html += "<td>" + (r.time_seconds != null ? r.time_seconds.toFixed(1) : "—") + "</td>";
+              if (hasErrors) html += "<td>" + (r.errors || 0) + "</td>";
+              html += "</tr>";
+            }
+
+            // Average row
+            const rates = configRuns.map(r => (r.result || {}).pass_rate || 0);
+            const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
+            const avgPrClass = avgRate >= 0.8 ? "benchmark-delta-positive" : avgRate < 0.5 ? "benchmark-delta-negative" : "";
+            html += '<tr class="benchmark-row-avg ' + rowClass + '">';
+            html += "<td>" + configLabel + "</td>";
+            html += "<td>Avg</td>";
+            html += '<td class="' + avgPrClass + '">' + (avgRate * 100).toFixed(0) + "%</td>";
+            if (hasTime) {
+              const times = configRuns.map(r => (r.result || {}).time_seconds).filter(t => t != null);
+              html += "<td>" + (times.length ? (times.reduce((a, b) => a + b, 0) / times.length).toFixed(1) : "—") + "</td>";
+            }
+            if (hasErrors) html += "<td></td>";
+            html += "</tr>";
+          }
+          html += "</tbody></table>";
+
+          // Per-assertion detail for this eval
+          const runsWithExpectations = {};
+          for (const config of configGroups) {
+            runsWithExpectations[config] = evalRuns.filter(r => r.configuration === config && r.expectations && r.expectations.length > 0);
+          }
+          const hasAnyExpectations = Object.values(runsWithExpectations).some(runs => runs.length > 0);
+          if (hasAnyExpectations) {
+            // Collect all unique assertion texts across all configs
+            const allAssertions = [];
+            const seen = new Set();
+            for (const config of configGroups) {
+              for (const run of runsWithExpectations[config]) {
+                for (const exp of (run.expectations || [])) {
+                  if (!seen.has(exp.text)) {
+                    seen.add(exp.text);
+                    allAssertions.push(exp.text);
+                  }
+                }
+              }
+            }
+
+            html += '<table class="benchmark-table" style="margin-top: 0.5rem;">';
+            html += "<thead><tr><th>Assertion</th>";
+            for (const config of configGroups) {
+              const label = config.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+              html += "<th>" + escapeHtml(label) + "</th>";
+            }
+            html += "</tr></thead><tbody>";
+
+            for (const assertionText of allAssertions) {
+              html += "<tr><td>" + escapeHtml(assertionText) + "</td>";
+
+              for (const config of configGroups) {
+                html += "<td>";
+                for (const run of runsWithExpectations[config]) {
+                  const exp = (run.expectations || []).find(e => e.text === assertionText);
+                  if (exp) {
+                    const cls = exp.passed ? "benchmark-delta-positive" : "benchmark-delta-negative";
+                    const icon = exp.passed ? "\u2713" : "\u2717";
+                    html += '<span class="' + cls + '" title="Run ' + run.run_number + ': ' + escapeHtml(exp.evidence || "") + '">' + icon + "</span> ";
+                  } else {
+                    html += "— ";
+                  }
+                }
+                html += "</td>";
+              }
+              html += "</tr>";
+            }
+            html += "</tbody></table>";
+          }
+        }
+      }
+
+      // Notes
+      if (notes.length > 0) {
+        html += '<div class="benchmark-notes">';
+        html += "<h3>Analysis Notes</h3>";
+        html += "<ul>";
+        for (const note of notes) {
+          html += "<li>" + escapeHtml(note) + "</li>";
+        }
+        html += "</ul></div>";
+      }
+
+      container.innerHTML = html;
+    }
+
+    // ---- Start ----
+    init();
+    renderBenchmark();
+  </script>
+</body>
+</html>

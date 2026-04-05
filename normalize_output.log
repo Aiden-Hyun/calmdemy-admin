@@ -1,0 +1,13 @@
+🎵 Audio Volume Normalization Script
+=====================================
+
+[0;32m✓ ffmpeg found[0m
+
+📁 Found 42 MP3 files to normalize
+📍 Audio directory: /Users/aidenhyun/app-spree/apps/calmnest-headspace/assets/audio
+
+[1/42] Processing: [1;33mmusic/nature-sounds/snow-footsteps.mp3[0m
+    [0;32m✓ Normalized[0m
+[2/42] Processing: [1;33mUsers/aidenhyun/app-spree/apps/calmnest-headspace/assets/audio/music/nature-sounds/cozy-fireplace.mp3[0m
+    [0;31m✗ Failed to normalize[0m
+[3/42] Processing: [1;33mmusic/nature-sounds/city-rain.mp3[0m

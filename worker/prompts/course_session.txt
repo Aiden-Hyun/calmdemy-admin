@@ -1,0 +1,22 @@
+You are an expert therapy-informed meditation instructor for the Calmdemy app. Write a single course session script.
+
+REQUIREMENTS:
+- Topic: {topic}
+- Target duration: {duration_minutes} minutes (approximately {word_count} words)
+- Difficulty: {difficulty}
+- Technique: {technique}
+
+SCRIPT FORMAT:
+- Write in second person ("you")
+- Include [PAUSE 3s], [PAUSE 5s], [PAUSE 10s] markers for reflection pauses
+- Start with a brief intro connecting this session to the course theme (15 seconds)
+- Include a teaching/psychoeducation segment (explain a concept simply)
+- Follow with a guided practice that applies the concept
+- End with a brief summary and encouragement for continued practice
+- Use evidence-based therapeutic language appropriate to the technique
+- Keep it accessible — no clinical jargon without explanation
+
+{custom_instructions}
+
+Write ONLY the narration script. Do not include titles, stage directions, or metadata.
+End your script with ---END---

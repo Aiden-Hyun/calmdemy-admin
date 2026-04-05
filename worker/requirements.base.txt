@@ -1,0 +1,29 @@
+# Firebase / Google Cloud
+firebase-admin==6.*
+google-cloud-compute==1.*
+google-cloud-storage==2.*
+
+# Google Gemini API
+google-genai>=1.0
+
+# LLM inference (cloud GPU)
+transformers>=4.50
+torch>=2.6
+torchaudio
+accelerate==1.*
+
+# Image generation (Flux2 pipelines require diffusers main)
+diffusers @ git+https://github.com/huggingface/diffusers.git@main
+safetensors>=0.4
+Pillow>=10.0
+huggingface_hub>=0.34,<2.0
+
+# TTS
+numpy
+
+# Audio processing
+pydub==0.25.*
+mutagen==1.*
+
+# Utilities
+python-dotenv==1.*

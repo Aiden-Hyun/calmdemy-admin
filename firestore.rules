@@ -1,0 +1,248 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isValidReportCategory(category) {
+      return category in ['audio_issue', 'wrong_content', 'inappropriate', 'other'];
+    }
+
+    function isValidContentReportCreate() {
+      return request.resource.data.keys().hasOnly([
+          'user_id',
+          'content_id',
+          'content_type',
+          'category',
+          'description',
+          'status',
+          'reported_at',
+        ])
+        && request.resource.data.user_id == request.auth.uid
+        && request.resource.data.content_id is string
+        && request.resource.data.content_type is string
+        && isValidReportCategory(request.resource.data.category)
+        && (
+          !('description' in request.resource.data)
+          || request.resource.data.description == null
+          || request.resource.data.description is string
+        )
+        && request.resource.data.status == 'open';
+    }
+
+    // Users can read their own user document; cannot set role from client
+    match /users/{userId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+      allow write: if isSignedIn()
+        && request.auth.uid == userId
+        && !('role' in request.resource.data);
+    }
+
+    // Meditation sessions - users can only access their own
+    match /meditation_sessions/{sessionId} {
+      allow read, write: if isSignedIn() && request.auth.uid == resource.data.user_id;
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.user_id;
+    }
+
+    // User favorites - users can only access their own
+    match /user_favorites/{favoriteId} {
+      allow read, write: if isSignedIn() && request.auth.uid == resource.data.user_id;
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.user_id;
+    }
+
+    // Public read-only content
+    match /guided_meditations/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /breathing_exercises/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /bedtime_stories/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /meditation_programs/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /emergency_meditations/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /courses/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /course_sessions/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /subjects/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /daily_quotes/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /sleep_meditations/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /sleep_sounds/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /background_sounds/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /white_noise/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /music/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /asmr/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /albums/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /series/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /narrators/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // User-specific progress/history
+    match /listening_history/{docId} {
+      allow read, update, delete: if isSignedIn() && request.auth.uid == resource.data.user_id;
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.user_id;
+    }
+
+    match /playback_progress/{docId} {
+      allow read, update, delete: if isSignedIn() && request.auth.uid == resource.data.user_id;
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.user_id;
+    }
+
+    match /completed_content/{docId} {
+      allow read, update, delete: if isSignedIn() && request.auth.uid == resource.data.user_id;
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.user_id;
+    }
+
+    match /content_ratings/{docId} {
+      allow read, update, delete: if isSignedIn() && request.auth.uid == resource.data.user_id;
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.user_id;
+    }
+
+    match /content_reports/{docId} {
+      allow create: if isSignedIn() && isValidContentReportCreate();
+      allow read: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    // Admin-only content metadata audit logs
+    match /content_audit_logs/{auditId} {
+      allow read: if isAdmin();
+      allow write: if false;
+
+      match /entries/{entryId} {
+        allow read: if isAdmin();
+        allow write: if false;
+      }
+    }
+
+    // Admin-only content factory jobs
+    match /content_jobs/{jobId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Worker status (read-only for admins)
+    match /worker_status/{workerId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Local worker control (admins can read/write)
+    match /worker_control/{workerId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Factory metrics (admins can read)
+    match /factory_metrics/{docId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Factory V2 runtime/debug collections (admins can read for troubleshooting UI)
+    match /factory_step_runs/{docId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /factory_job_runs/{docId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /factory_jobs/{jobId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /factory_step_queue/{docId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /factory_events/{docId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Multi-stack status (admins can read)
+    match /worker_stacks_status/{docId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Worker log tails (admins can read)
+    match /worker_log_tails/{stackId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+  }
+}

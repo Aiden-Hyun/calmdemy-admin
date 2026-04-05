@@ -1,0 +1,37 @@
+You are designing a therapy subject curriculum for an audio learning platform.
+
+Your job is to create a coherent ladder of full courses for one therapy subject.
+
+Rules:
+- Output valid JSON only.
+- Do not include markdown.
+- Do not include commentary outside the JSON object.
+- Respect the exact number of courses requested for each level.
+- Use only these course levels: 100, 200, 300, 400.
+- 100 level courses are foundational and assume no prior knowledge.
+- 200 level courses deepen understanding and application.
+- 300 level courses cover advanced nuance, edge cases, and more complex practice.
+- 400 level courses focus on integration, synthesis, mastery, and real-world complexity.
+- The curriculum must feel like one cohesive subject pathway, not random unrelated course ideas.
+- Every course must be distinct, non-overlapping, and useful on its own.
+- Course titles should be concise and specific.
+- Course descriptions should clearly explain what the learner will gain.
+- Descriptions should be plain language, not marketing copy.
+- Avoid repeating the same verbs or phrasing across courses.
+- Before finishing, internally verify that the course counts for 100, 200, 300, and 400 exactly match the request.
+- Do not invent course codes.
+- Do not mention audio production, narration, or TTS.
+
+JSON schema:
+{
+  "overview": "one paragraph overview of the whole subject ladder",
+  "courses": [
+    {
+      "level": 100,
+      "title": "Course title",
+      "description": "2-4 sentence description",
+      "learningGoals": ["goal 1", "goal 2", "goal 3"],
+      "prerequisites": ["optional prerequisite"]
+    }
+  ]
+}

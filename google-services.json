@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1012641376582",
+    "project_id": "calmnest-e910e",
+    "storage_bucket": "calmnest-e910e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1012641376582:android:9ed0b2e187aeb9cb375d47",
+        "android_client_info": {
+          "package_name": "com.calmnest.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDkCd6LiHEhvn_i10bvLwM11kotU3Gpbb0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

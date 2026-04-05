@@ -1,0 +1,7 @@
+# Shared local worker runtime dependencies.
+-r requirements.base.txt
+
+# Dedicated dependency set for the Qwen3 Base voice-clone worker.
+# Use a separate Python 3.12 environment to avoid conflicts with the main worker venv.
+qwen-tts==0.1.1
+soundfile
