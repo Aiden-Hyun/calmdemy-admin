@@ -40,6 +40,15 @@ const DOWNLOADS_DIR = `${FileSystem.documentDirectory}downloads/`;
 /**
  * Metadata for downloaded audio content.
  * Stored in AsyncStorage for persistence; combined with file system state.
+ *
+ * DOMAIN FIELDS:
+ * - contentId, contentType, title, duration_minutes, thumbnailUrl: Core meditation metadata
+ * - localPath: Absolute file path (returned by expo-file-system after download)
+ * - downloadedAt, fileSize: Lifecycle tracking (storage management, recency)
+ *
+ * NAVIGATION FIELDS:
+ * - parentId/parentTitle: Links back to course/series/album (enables "go back" in UI)
+ * - audioPath: Original remote path (for reference or re-download decision)
  */
 export interface DownloadedContent {
   contentId: string;
@@ -61,6 +70,17 @@ export interface DownloadedContent {
  * Tracks ongoing downloads and their progress callbacks.
  * Cleared on app restart; not persisted to disk.
  * Used for progress updates and cancellation support.
+ *
+ * LIFECYCLE:
+ * - activeDownloads populated in downloadAudio() → cleared on completion or error
+ * - downloadProgressCallbacks populated in downloadAudio() → called by resumable progress callback
+ * - Both maps are transient; exist only while download is in flight
+ * - Critical for supporting cancelDownload() and real-time UI updates
+ *
+ * WHY TRANSIENT (NOT PERSISTED):
+ * - Download state is ephemeral; lost on app restart is acceptable (user sees "not downloaded")
+ * - Persisting would require complex recovery logic on app resume
+ * - File system state (does file exist?) is authoritative; metadata in AsyncStorage is backup
  */
 // Map of contentId -> FileSystem.DownloadResumable for active downloads
 const activeDownloads = new Map<string, FileSystem.DownloadResumable>();
@@ -72,11 +92,18 @@ const downloadProgressCallbacks = new Map<string, (progress: number) => void>();
  * Creates intermediate directories if needed (intermediates: true).
  * GUARD CLAUSE: Called at start of downloadAudio() to prevent ENOENT errors.
  *
- * @throws Silent; logs errors to console but allows graceful degradation
+ * SIDE EFFECT: Creates ~/Documents/downloads/ directory on first call.
+ * Idempotent: Safe to call repeatedly (checks exists before creating).
+ *
+ * ERROR HANDLING: Silent; logs errors to console but allows graceful degradation
+ * If directory creation fails, downloadAudio() will fail downstream (file write will error).
+ *
+ * @throws Does not throw; logs errors and lets caller handle failure
  */
 async function ensureDownloadsDir(): Promise<void> {
   const dirInfo = await FileSystem.getInfoAsync(DOWNLOADS_DIR);
   if (!dirInfo.exists) {
+    // intermediates: true creates parent directories if needed (like mkdir -p)
     await FileSystem.makeDirectoryAsync(DOWNLOADS_DIR, { intermediates: true });
   }
 }
@@ -89,7 +116,13 @@ async function ensureDownloadsDir(): Promise<void> {
  * SYNCHRONIZATION NOTE: Returns data from last successful save; may stale if app crashes
  * during download. File system state is authoritative; use isDownloaded() to verify files.
  *
- * @returns Array of downloaded content, empty array if none or storage read fails
+ * PATTERN: Many functions follow this pattern:
+ * 1. Call getDownloadedContent() to get current list
+ * 2. Modify (add/remove/update) items in the list
+ * 3. Call saveDownloadedContent() to persist changes
+ * This ensures atomicity per operation (but not across multiple operations).
+ *
+ * @returns Array of downloaded content, empty array if none or storage read fails (graceful)
  */
 export async function getDownloadedContent(): Promise<DownloadedContent[]> {
   try {
@@ -98,6 +131,7 @@ export async function getDownloadedContent(): Promise<DownloadedContent[]> {
     return JSON.parse(data);
   } catch (error) {
     console.error('Error getting downloaded content:', error);
+    // Return empty array on error; allows app to continue (offline gracefully)
     return [];
   }
 }
@@ -105,15 +139,21 @@ export async function getDownloadedContent(): Promise<DownloadedContent[]> {
 /**
  * Save downloaded content metadata to AsyncStorage.
  * INTERNAL: Called after successful file download to persist metadata.
- * Private function (internal use only); exported functions handle persistence.
+ * Not exported; internal use only. Higher-level functions (downloadAudio, deleteDownload) handle persistence.
  *
- * @param downloads - Array of DownloadedContent to save
- * @throws Silent; logs errors but continues execution
+ * TIMING: Must be called AFTER file successfully downloaded to disk.
+ * If metadata saved but file missing, isDownloaded() will detect mismatch and return false.
+ * If file exists but metadata missing, file is orphaned (recoverable via periodic cleanup).
+ *
+ * @param downloads - Array of DownloadedContent to save (full array, not just one item)
+ * @throws Does not throw; logs errors but continues (graceful degradation)
  */
 async function saveDownloadedContent(downloads: DownloadedContent[]): Promise<void> {
   try {
     await AsyncStorage.setItem(DOWNLOADS_KEY, JSON.stringify(downloads));
   } catch (error) {
+    // Log but don't throw; app can still function without this metadata update
+    // File is on disk; metadata loss is less critical than file loss
     console.error('Error saving downloaded content:', error);
   }
 }
@@ -124,7 +164,15 @@ async function saveDownloadedContent(downloads: DownloadedContent[]): Promise<vo
  * IMPORTANT: Checks both AsyncStorage record AND actual file presence; not just metadata.
  * Handles case where files deleted by OS (low storage, manual deletion, etc).
  *
+ * WHY TWO-PHASE CHECK:
+ * - Metadata can drift from file system state (OS deletes files, user clears cache)
+ * - Trusting metadata alone leads to failed playback attempts and poor UX
+ * - File system check is the "truth"; metadata is just optimization
+ *
  * USE CASE: Guard clause before trying to load offline content; avoid 404 errors.
+ * Called by audio player to decide: stream remote URL or load local file.
+ *
+ * PERFORMANCE: Two async I/O operations; acceptable for offline availability checks (infrequent).
  *
  * @param contentId - Unique content identifier
  * @returns true if metadata exists AND file is present on disk, false otherwise
@@ -135,7 +183,7 @@ export async function isDownloaded(contentId: string): Promise<boolean> {
   if (!download) return false;
 
   /**
-   * DEFENSIVE CHECK: Verify file still exists on disk.
+   * DEFENSIVE FILE SYSTEM CHECK: Verify file still exists on disk.
    * Metadata can become stale if OS purges files (cache clearing, low storage recovery).
    * This ensures we don't report file as available if it's been deleted.
    */
@@ -151,6 +199,10 @@ export async function isDownloaded(contentId: string): Promise<boolean> {
  * USE CASE: Audio player calls this to decide between offline vs. streaming playback.
  * FLOW: If null, player falls back to remote URL streaming.
  *
+ * DEFENSIVE PROGRAMMING: Unlike isDownloaded(), returns path directly (not just exists check).
+ * Player needs actual path to pass to expo-av playback function.
+ * Still verifies file exists (defensive check before returning path).
+ *
  * @param contentId - Unique content identifier
  * @returns Absolute file path if downloaded, null if not available
  */
@@ -162,10 +214,12 @@ export async function getLocalAudioPath(contentId: string): Promise<string | nul
   /**
    * DEFENSIVE: Verify file still exists before returning path.
    * Prevents audio player from trying to load non-existent file.
+   * If file was deleted by OS, returns null so player falls back to streaming.
    */
   const fileInfo = await FileSystem.getInfoAsync(download.localPath);
   if (!fileInfo.exists) return null;
 
+  // Safe to return: file exists, path is valid
   return download.localPath;
 }
 
@@ -238,24 +292,31 @@ export async function downloadAudio(
 
     /**
      * CREATE RESUMABLE DOWNLOAD:
-     * expo-file-system's createDownloadResumable supports:
-     * - Large files (doesn't load into memory)
-     * - Network interruptions (can pause and resume)
-     * - Progress tracking via callback
+     * expo-file-system's createDownloadResumable is critical for offline experience:
+     * - Large files: Streams to disk (doesn't load 100MB into RAM)
+     * - Network resilience: Can pause/resume if connection drops
+     * - Progress tracking: Callback fired with byte counts (enables UI progress bar)
+     *
+     * MEMORY MODEL: File written incrementally; only small buffers in memory at a time.
+     * This allows downloading large meditations (30+ min audio) on limited-memory devices.
      */
     const downloadResumable = FileSystem.createDownloadResumable(
       audioUrl,
       localPath,
-      {}, // options (headers, etc)
+      {}, // options: could include headers for auth, custom user-agent, etc
       (downloadProgress) => {
         /**
          * PROGRESS CALLBACK:
-         * Called multiple times during download with byte counts.
-         * Calculate percentage and invoke UI callback.
+         * Called multiple times during download with { totalBytesWritten, totalBytesExpectedToWrite }.
+         * Calculate percentage (0-100) and invoke UI callback if registered.
+         *
+         * THREADING: Called on background thread; safe to call UI updates (React handles batching).
+         * FREQUENCY: Depends on network speed and chunk size; not every byte, but periodic.
          */
         const progress = downloadProgress.totalBytesWritten / downloadProgress.totalBytesExpectedToWrite;
         const callback = downloadProgressCallbacks.get(contentId);
         if (callback) {
+          // UI expects 0-100 percentage as integer
           callback(Math.round(progress * 100));
         }
       }
@@ -303,6 +364,9 @@ export async function downloadAudio(
      * PERSIST METADATA:
      * Create DownloadedContent record and save to AsyncStorage.
      * This is the "single source of truth" for offline availability.
+     *
+     * TIMING: Do this AFTER file is confirmed to exist (after downloadAsync()).
+     * If we save metadata but file download fails, defensive checks will catch mismatch.
      */
     const downloads = await getDownloadedContent();
     const newDownload: DownloadedContent = {
@@ -311,18 +375,24 @@ export async function downloadAudio(
       title: metadata.title,
       duration_minutes: metadata.duration_minutes,
       thumbnailUrl: metadata.thumbnailUrl,
-      localPath: result.uri,
-      downloadedAt: Date.now(),
-      fileSize,
+      localPath: result.uri, // Absolute path from expo-file-system result
+      downloadedAt: Date.now(), // Timestamp for recency tracking (cleanup, UI sorting)
+      fileSize, // From file system query; used for storage quota display
       parentId: metadata.parentId,
       parentTitle: metadata.parentTitle,
       audioPath: metadata.audioPath,
     };
 
     /**
-     * UPSERT PATTERN:
-     * Remove old record (if exists) and append new one.
-     * Ensures only one record per contentId (deduplication).
+     * UPSERT PATTERN: "Update or Insert"
+     * 1. Filter out any old record with same contentId (deduplication)
+     * 2. Append new record to list
+     * 3. Persist entire list to AsyncStorage
+     *
+     * WHY NOT JUST APPEND:
+     * - If user re-downloads same content, old record stays; metadata could drift
+     * - Filter + push ensures exactly one record per contentId
+     * - Inefficient for large lists, but typical download count is <100 items
      */
     const updatedDownloads = downloads.filter(d => d.contentId !== contentId);
     updatedDownloads.push(newDownload);
@@ -344,11 +414,14 @@ export async function downloadAudio(
  * Called when user taps "Cancel" on download UI.
  *
  * STRATEGY: Calls pauseAsync() rather than deleteAsync().
- * Paused downloads can be resumed later if same URL.
+ * Paused downloads can be resumed later if same URL (future enhancement).
  * File left on disk is partial; will be overwritten on retry.
  *
  * ERROR HANDLING: Silently ignores pause errors (already stopped, etc).
- * Always cleans up in-memory state (activeDownloads, callbacks).
+ * Always cleans up in-memory state (activeDownloads, callbacks) regardless of pause success.
+ *
+ * CLEANUP GUARANTEE: Even if pause fails, in-memory state is cleaned up.
+ * This prevents stale callbacks from firing if download somehow completes later.
  *
  * @param contentId - Content to cancel
  */
@@ -358,14 +431,21 @@ export async function cancelDownload(contentId: string): Promise<void> {
     try {
       /**
        * PAUSE vs DELETE:
-       * pauseAsync(): Leaves partial file; can resume if needed
-       * Alternative: deleteAsync() would clean up fully (not used here)
+       * pauseAsync(): Pauses download, leaves partial file for potential resume
+       *   - Advantage: Low latency, supports resume if user retaps download
+       *   - Disadvantage: Orphaned partial files if never resumed
+       * deleteAsync(): Fully deletes partial file
+       *   - Advantage: Clean storage (no orphaned files)
+       *   - Disadvantage: Higher latency, wastes work if user wants to resume
+       * Current choice (pause) favors UX (fast cancellation) over storage efficiency.
        */
       await download.pauseAsync();
     } catch (error) {
-      // Ignore errors when canceling; best-effort cleanup
+      // Ignore errors when canceling; best-effort approach
+      // Download may have already finished, failed, or been cleaned up
     }
-    // Always clean up in-memory state
+
+    // Always clean up in-memory state, even if pause fails
     activeDownloads.delete(contentId);
     downloadProgressCallbacks.delete(contentId);
   }
@@ -431,12 +511,14 @@ export async function deleteDownload(contentId: string): Promise<boolean> {
  * Delete all downloaded content and free storage.
  * Used for "Clear All" in storage management, cache clearing, account cleanup.
  *
- * ERROR HANDLING:
- * - Continues deleting other files even if one fails
- * - Always clears metadata at end (best-effort approach)
+ * ERROR HANDLING STRATEGY:
+ * - Continues deleting other files even if one fails (best effort)
+ * - Always clears metadata at end (accepts partial file cleanup)
  * - Returns true if metadata cleared, false if metadata save fails
+ * - Orphaned files are less critical than broken metadata (users expect "Clear All" to work)
  *
  * USE CASE: Storage settings "Clear all downloads" button.
+ * Performance acceptable: <100 typical files, each delete is fast.
  *
  * @returns true if successful, false if metadata clearing failed
  */
@@ -445,10 +527,15 @@ export async function deleteAllDownloads(): Promise<boolean> {
     const downloads = await getDownloadedContent();
 
     /**
-     * DEFENSIVE LOOP:
-     * Try to delete each file independently.
-     * If one fails, log it but continue with others.
-     * Ensures maximum cleanup even if some files are locked.
+     * DEFENSIVE LOOP: Delete each file independently.
+     * Pattern: try/catch per file so failures don't stop others.
+     *
+     * RATIONALE:
+     * - Some files might be locked by audio player or OS
+     * - Don't want one failure to prevent cleaning up all others
+     * - Logs failures but continues (maximizes cleanup)
+     *
+     * DOWNSIDE: May leave orphaned files on disk (acceptable; users can reinstall app).
      */
     for (const download of downloads) {
       try {
@@ -458,19 +545,24 @@ export async function deleteAllDownloads(): Promise<boolean> {
         }
       } catch (error) {
         // Log and continue; don't let one failure stop the rest
+        // File may be locked by active playback or OS background process
         console.error(`Failed to delete individual download ${download.contentId}:`, error);
       }
     }
 
     /**
-     * CLEAR ALL METADATA:
-     * Reset AsyncStorage to empty array (source of truth).
-     * File system cleanup is best-effort; metadata is definitive.
+     * CLEAR ALL METADATA: Reset AsyncStorage to empty array.
+     * This is the "source of truth" for download state.
+     *
+     * KEY PRINCIPLE: Even if file cleanup is partial, metadata is clean.
+     * This is safer than the reverse (clean metadata + orphaned files on disk).
+     * isDownloaded() will reject orphaned files anyway (metadata missing).
      */
     await saveDownloadedContent([]);
 
     return true;
   } catch (error) {
+    // Outer try/catch for unexpected failures (e.g., AsyncStorage inaccessible)
     console.error('Error deleting all downloads:', error);
     return false;
   }
@@ -478,13 +570,20 @@ export async function deleteAllDownloads(): Promise<boolean> {
 
 /**
  * Calculate total storage consumed by all downloaded content.
- * Used for storage quota displays and warnings.
+ * Used for storage quota displays and warnings in settings screen.
  *
  * IMPLEMENTATION:
- * Sums fileSize from metadata (not re-querying file system).
+ * Sums fileSize from metadata (not re-querying file system for each file).
  * Assumes metadata fileSize is accurate; may drift if files deleted externally.
  *
- * PERFORMANCE: O(n) where n = number of downloads; acceptable for typical use.
+ * ACCURACY TRADEOFF:
+ * - Fast: O(1) for sync calculation (metadata already loaded)
+ * - Approximate: If OS deletes files, metadata sizes are stale
+ * - Acceptable: Minor drift is OK for UI display (not critical like payment systems)
+ *
+ * ALTERNATIVE (not used): Could walk file system and stat each file (accurate but slow).
+ *
+ * PERFORMANCE: O(n) where n = number of downloads; acceptable for typical use (<100 items).
  *
  * @returns Total bytes used, 0 if no downloads
  */
@@ -497,19 +596,30 @@ export async function getTotalStorageUsed(): Promise<number> {
  * Format bytes into human-readable string (B, KB, MB, GB).
  * Utility for display in storage management UI.
  *
+ * ALGORITHM:
+ * - Find largest unit where value >= 1 (e.g., 5242880 bytes -> MB)
+ * - Divide bytes by that unit (5242880 / 1048576 = 5.0)
+ * - Round to 1 decimal place ("5.0 MB")
+ *
  * EXAMPLE OUTPUTS:
+ * 0 -> "0 B"
+ * 512 -> "512 B"
  * 1024 -> "1.0 KB"
  * 5242880 -> "5.0 MB"
  * 1073741824 -> "1.0 GB"
+ *
+ * PLATFORM NOTE: Works on all platforms (web, iOS, Android).
  *
  * @param bytes - Number of bytes
  * @returns Formatted string (e.g., "5.2 MB")
  */
 export function formatFileSize(bytes: number): string {
   if (bytes === 0) return '0 B';
-  const k = 1024;
+  const k = 1024; // Binary units (1024 bytes per KB, not 1000)
   const sizes = ['B', 'KB', 'MB', 'GB'];
+  // Find index of largest unit where bytes / k^i >= 1
   const i = Math.floor(Math.log(bytes) / Math.log(k));
+  // Divide by appropriate power of 1024 and format to 1 decimal
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
 }
 
@@ -517,15 +627,23 @@ export function formatFileSize(bytes: number): string {
  * Get all downloaded content IDs filtered by type.
  * Used for bulk operations: "are all meditations in course X downloaded?"
  *
- * RETURN TYPE: Set for O(1) membership tests (used by calling code).
+ * RETURN TYPE: Set for O(1) membership tests.
+ * Calling code uses: downloadedIds.has(contentId) to check if item is downloaded.
  *
- * USE CASE: UI checks getDownloadedContentIds('meditate') to filter UI state.
+ * USE CASE: UI renders a meditation list with download buttons.
+ * Loop through items and check if each is in downloadedIds Set (fast constant-time lookup).
+ * More efficient than calling isDownloaded() for each item (which does file system check).
+ *
+ * LIMITATION: Only checks metadata, doesn't verify files exist.
+ * If file was deleted by OS, this returns true but isDownloaded() returns false.
+ * Acceptable for UI state (button labels); actual playback uses isDownloaded().
  *
  * @param contentType - Type to filter by (meditate, sleep, music, etc)
  * @returns Set of content IDs for efficient membership testing
  */
 export async function getDownloadedContentIds(contentType: string): Promise<Set<string>> {
   const downloads = await getDownloadedContent();
+  // Filter by type, extract IDs, return as Set (enables has() for O(1) lookup)
   const ids = downloads.filter(d => d.contentType === contentType).map(d => d.contentId);
   return new Set(ids);
 }

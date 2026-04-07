@@ -1,19 +1,30 @@
 /**
- * Modal dropdown selector with audio preview support.
+ * Modal dropdown list selector with inline audio preview.
+ *
+ * ARCHITECTURAL ROLE:
+ * Modal select control for voice/model selection. Shows options in bottom sheet
+ * modal with optional audio preview for each option.
  *
  * DESIGN PATTERNS:
- * - Modal presentation: Bottom sheet on mobile, overlay on web
- * - Audio preview: Users can play sample audio before selecting
- * - Deferred loading: Previews only load when user opens modal
- * - Cleanup on close: Audio player stopped and released on modal dismiss
+ * - Modal presentation: Bottom sheet on mobile, centered overlay on web
+ * - Audio preview: Users can play sample audio (sampleUrl) before selecting
+ * - Deferred loading: Audio only loads when modal opens and user clicks play
+ * - Cleanup on close: Audio player stops and resources released on modal dismiss
+ * - Lazy state: Previewing state tracked per item; switching stops previous
  *
- * USAGE (e.g., for TTS model selection):
+ * INTERACTION:
+ * 1. Tap trigger button -> open modal, render FlatList of options
+ * 2. Tap option label -> select and close
+ * 3. Tap play icon -> load + play audio (or pause if already playing)
+ * 4. Swipe/tap overlay -> close modal without selecting
+ *
+ * USAGE EXAMPLE:
  * ```tsx
  * <Dropdown
- *   options={ttsModels}
- *   selectedId={selectedModelId}
- *   onSelect={(id) => setSelectedModelId(id)}
- *   placeholder="Choose a model..."
+ *   options={voiceOptions}
+ *   selectedId={selectedVoiceId}
+ *   onSelect={(id) => setSelectedVoiceId(id)}
+ *   placeholder="Choose a voice..."
  * />
  * ```
  */

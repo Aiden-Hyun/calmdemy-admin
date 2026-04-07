@@ -1,24 +1,35 @@
 /**
- * Radio button group with optional audio preview (inline layout).
+ * Radio button group with inline audio preview.
+ *
+ * ARCHITECTURAL ROLE:
+ * Inline radio selection control for single-choice lists. Shows all options
+ * vertically with optional audio preview for each.
  *
  * DESIGN PATTERNS:
- * - Radio semantics: Single choice, mutually exclusive
- * - Audio preview: Each option can have sample asset or URL for preview
- * - Inline layout: Unlike Dropdown, options always visible (suitable for small lists)
+ * - Radio semantics: Single choice, mutually exclusive selection
+ * - Audio preview: Each option can have sampleAsset (local) or sampleUrl (remote)
+ * - Always expanded: Unlike Dropdown, options are always visible
+ * - Inline play: Preview buttons visible on each option
+ * - Smart cleanup: Audio resources released on unmount
  *
- * USAGE (e.g., for TTS voice selection):
+ * VS DROPDOWN:
+ * - RadioGroup: Better for 3-5 options, always visible, more compact
+ * - Dropdown: Better for 6+ options, saves space, modal UX
+ *
+ * INTERACTION:
+ * 1. Tap radio button / label -> select option
+ * 2. Tap play icon -> load + play audio (if available)
+ * 3. Tap play again -> pause
+ * 4. Switch options -> previous audio stops, new loads + plays
+ *
+ * USAGE EXAMPLE:
  * ```tsx
  * <RadioGroup
- *   options={voices}
+ *   options={voiceOptions}
  *   selectedId={selectedVoiceId}
  *   onSelect={(id) => setSelectedVoiceId(id)}
  * />
  * ```
- *
- * DIFFERENCES FROM DROPDOWN:
- * - RadioGroup is always expanded (no modal)
- * - Better for 3-5 options; Dropdown better for longer lists
- * - Each option has play/pause button visible
  */
 
 import React, { useMemo, useState, useEffect } from 'react';

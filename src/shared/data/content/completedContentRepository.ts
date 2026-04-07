@@ -110,12 +110,15 @@ export async function getCompletedContentIds(
 ): Promise<Set<string>> {
   try {
     // Composite query: two equality filters on user_id and content_type
+    // Firestore will use a composite index if collection grows beyond 1000 docs
     const q = query(
       completedContentCollection,
       where("user_id", "==", userId),
       where("content_type", "==", contentType)
     );
     const snapshot = await getDocs(q);
+
+    // Build Set for O(1) membership lookups in UI render loops
     const completedIds = new Set<string>();
     snapshot.docs.forEach((docSnapshot) => {
       const data = docSnapshot.data();
@@ -124,6 +127,8 @@ export async function getCompletedContentIds(
     return completedIds;
   } catch (error) {
     console.error("Error getting completed content:", error);
+    // Return empty Set rather than throwing to allow graceful degradation
+    // UI will render as if no content completed, avoiding crashes
     return new Set<string>();
   }
 }
@@ -150,12 +155,14 @@ export async function isContentCompleted(
   contentId: string
 ): Promise<boolean> {
   try {
-    // Direct document lookup using composite key for O(1) access
+    // Direct document lookup using composite key: much faster than query
+    // getDoc() is single-document read (O(1)), query would scan multiple docs
     const docId = `${userId}_${contentId}`;
     const docSnap = await getDoc(doc(completedContentCollection, docId));
     return docSnap.exists();
   } catch (error) {
     console.error("Error checking content completion:", error);
+    // Return false on error: assume content not completed rather than crashing
     return false;
   }
 }

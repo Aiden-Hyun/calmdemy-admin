@@ -1,3 +1,29 @@
+/**
+ * LoadingScreen.tsx
+ *
+ * Architectural Role:
+ * Full-screen loading indicator shown during initial app startup or content loading.
+ * Features branded visuals (logo, app name, tagline) to create a polished loading experience
+ * rather than a bare spinner. Uses animated pulsing logo and sequential dot animations.
+ *
+ * Design Patterns:
+ * - Composed Animations: Combines fade-in (whole screen), pulse (logo), and sequential
+ *   dot animations to create a coordinated visual experience without overwhelming motion.
+ * - Theme-Aware Gradient: Background gradient adapts to light/dark mode for visual consistency.
+ * - Static Message: Accepts optional message prop to show context-specific loading text
+ *   (e.g., "Loading your meditation...", "Syncing offline content...").
+ *
+ * Key Dependencies:
+ * - LinearGradient: Background color transition
+ * - Animated API: All animations run on native thread for 60fps smoothness
+ * - ThemeContext: Colors for gradient and text
+ *
+ * Consumed By:
+ * - App initialization (splash screen during setup)
+ * - Content loading states (when navigating to heavy pages)
+ * - Async data fetch screens
+ */
+
 import React, { useEffect, useRef } from 'react';
 import {
   View,
@@ -17,12 +43,30 @@ interface LoadingScreenProps {
 
 export function LoadingScreen({ message = 'Loading your content...' }: LoadingScreenProps) {
   const { theme, isDark } = useTheme();
+
+  /**
+   * Animation values:
+   * - pulseAnim: Logo scale (1.0 → 1.05 → 1.0) for gentle breathing effect
+   * - fadeAnim: Screen fade-in from transparent to opaque
+   * - dot1/2/3Anim: Sequential dot opacity (0.3 → 1.0) for "loading" indicator
+   *
+   * All use refs to persist across renders and support looping animations.
+   */
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const dot1Anim = useRef(new Animated.Value(0.3)).current;
   const dot2Anim = useRef(new Animated.Value(0.3)).current;
   const dot3Anim = useRef(new Animated.Value(0.3)).current;
 
+  /**
+   * Orchestrate three coordinated animations on mount:
+   * 1. Fade in the entire screen (0 → 1 opacity, 400ms)
+   * 2. Subtle pulse the logo (bouncing between 1.0 and 1.05 scale, looped)
+   * 3. Sequential dots pulse (each dot fades in/out with a 300ms delay between starts)
+   *
+   * All animations run indefinitely or until component unmounts.
+   * useNativeDriver: true ensures smooth 60fps performance.
+   */
   useEffect(() => {
     // Fade in animation
     Animated.timing(fadeAnim, {

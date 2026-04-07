@@ -90,8 +90,9 @@ const updateContentReportStatusCallable = httpsCallable<
 >(functions, 'updateContentReportStatus');
 
 /**
- * Type guard to safely extract Timestamp from unknown value.
+ * Type guard to safely extract Firestore Timestamp from unknown value.
  * Used during document deserialization when Firestore SDK returns Timestamp objects.
+ * Enables type-safe coercion without runtime errors if value isn't actually a Timestamp.
  */
 function asTimestamp(value: unknown): Timestamp | undefined {
   return value instanceof Timestamp ? value : undefined;

@@ -1,19 +1,36 @@
 /**
- * Collapsible container for form sections (e.g., job params, scheduling).
+ * Accordion container for form sections with summary chips.
+ *
+ * ARCHITECTURAL ROLE:
+ * Wraps collapsible sections (params, scheduling, models) in job creation form.
+ * Reduces visual clutter via collapsed state; shows summary when folded.
  *
  * DESIGN PATTERN:
- * - Accordion: Expands to show content; collapses to show summary chips only
- * - Summary display: When collapsed, shows key value pairs (e.g., Duration: 10m)
+ * - Accordion: Controlled component (parent manages expanded state)
+ * - Summary display: When collapsed, shows key value chips (Duration: 10m, Courses: 9)
+ * - Visual feedback: Chevron icon rotates; divider shows on expand
  *
- * USAGE:
+ * LAYOUT:
+ * Header (clickable):
+ *   - Title (left)
+ *   - Summary chips (left, only when collapsed)
+ *   - Chevron icon (right, rotates)
+ * Content (when expanded):
+ *   - Divider line
+ *   - Children (form fields, etc.)
+ *
+ * USAGE EXAMPLE:
  * ```tsx
  * <CollapsibleSection
  *   title="Course Configuration"
- *   summaryItems={[{ label: 'Courses', value: '9' }]}
+ *   summaryItems={[
+ *     { label: 'Courses', value: '9' },
+ *     { label: 'Duration', value: '45m' }
+ *   ]}
  *   expanded={expandedSections.course}
  *   onToggle={() => toggleSection('course')}
  * >
- *   {/* form controls */}
+ *   {/* form controls render here */}
  * </CollapsibleSection>
  * ```
  */

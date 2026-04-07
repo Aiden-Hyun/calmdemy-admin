@@ -1,3 +1,33 @@
+/**
+ * @file LoginScreen.web.tsx
+ *
+ * Architectural Role:
+ *   Web-specific login screen for admin authentication.
+ *   Simpler than native (no account linking, no collision handling, no animations).
+ *   Targets admin/web users only; no mobile UX patterns.
+ *   Part of the MVVM View layer for the auth feature (web variant).
+ *
+ * Design Patterns:
+ *   - Strategy: Platform-specific variant (web implementation; see LoginScreen.tsx for native)
+ *   - Simple Form: Email/password + Google OAuth
+ *   - Auto-redirect: Redirects authenticated admins to /admin dashboard on mount
+ *
+ * Key Dependencies:
+ *   - AuthContext: useAuth() for email/password and Google sign-in
+ *   - ThemeContext: useTheme() for colors
+ *   - expo-router: useRouter() for navigation
+ *
+ * Features:
+ *   - Email/password form (sign-in or sign-up)
+ *   - Google OAuth button
+ *   - Error messages for failed attempts
+ *   - Toggle between sign-in and sign-up modes
+ *   - Auto-redirects to /admin if already authenticated
+ *
+ * Consumed By:
+ *   - expo-router on /login route (web platform only)
+ */
+
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -20,18 +50,28 @@ export default function LoginScreenWeb() {
   const { user, signIn, signUp, signInWithGoogle } = useAuth();
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
+
+  // Form state
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSignUpMode, setIsSignUpMode] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
 
+  /**
+   * Auto-redirect: if already authenticated, go to admin dashboard immediately.
+   */
   useEffect(() => {
     if (user) {
       router.replace('/admin');
     }
   }, [user]);
 
+  /**
+   * Handle email/password authentication.
+   * Routes to sign-up or sign-in based on mode toggle.
+   * On success, navigates to /admin dashboard.
+   */
   const handleEmailAuth = async () => {
     if (!email.trim() || !password) {
       setError('Enter both email and password.');
@@ -55,6 +95,10 @@ export default function LoginScreenWeb() {
     }
   };
 
+  /**
+   * Handle Google OAuth sign-in.
+   * On success, navigates to /admin dashboard.
+   */
   const handleGoogleAuth = async () => {
     setError('');
     setIsSubmitting(true);
@@ -76,6 +120,7 @@ export default function LoginScreenWeb() {
     >
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.card}>
+          {/* Badge: identifies this as web admin interface */}
           <View style={styles.badge}>
             <Text style={styles.badgeText}>Calmdemy Web Admin</Text>
           </View>
@@ -86,6 +131,7 @@ export default function LoginScreenWeb() {
           </Text>
 
           <View style={styles.form}>
+            {/* Email input */}
             <TextInput
               autoCapitalize="none"
               autoComplete="email"
@@ -96,6 +142,7 @@ export default function LoginScreenWeb() {
               value={email}
               onChangeText={setEmail}
             />
+            {/* Password input */}
             <TextInput
               autoCapitalize="none"
               autoComplete="password"
@@ -107,8 +154,10 @@ export default function LoginScreenWeb() {
               onChangeText={setPassword}
             />
 
+            {/* Error message if present */}
             {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
+            {/* Primary CTA: Email/password sign-in or sign-up */}
             <Pressable
               style={({ pressed }) => [
                 styles.primaryButton,
@@ -127,6 +176,7 @@ export default function LoginScreenWeb() {
               )}
             </Pressable>
 
+            {/* Secondary CTA: Google OAuth */}
             <Pressable
               style={({ pressed }) => [
                 styles.secondaryButton,
@@ -140,6 +190,7 @@ export default function LoginScreenWeb() {
             </Pressable>
           </View>
 
+          {/* Toggle between sign-in and sign-up modes */}
           <Pressable
             onPress={() => {
               setError('');
@@ -158,6 +209,10 @@ export default function LoginScreenWeb() {
   );
 }
 
+/**
+ * Style factory for web login screen.
+ * Creates a centered card layout with form inputs and buttons.
+ */
 const createStyles = (theme: Theme) =>
   StyleSheet.create({
     screen: {
@@ -170,6 +225,7 @@ const createStyles = (theme: Theme) =>
       padding: 24,
     },
     card: {
+      // Centered card with max width for large screens
       width: '100%',
       maxWidth: 520,
       alignSelf: 'center',

@@ -1,3 +1,24 @@
+/**
+ * Left-hand sidebar navigation and worker status card.
+ *
+ * ARCHITECTURAL ROLE:
+ * Primary navigation for admin views (dashboard, content manager, reports).
+ * Shows real-time worker heartbeat status and action buttons.
+ *
+ * DESIGN PATTERN:
+ * - Navigation bar: Vertical tab-like UI with active indicator
+ * - Badge notifications: Shows open report count on reports tab
+ * - Worker status display: Live color-coded heartbeat indicator
+ * - Persistent header: Brand, create button, nav always visible
+ *
+ * SECTIONS:
+ * 1. Brand header: Calmdemy logo + "Admin Console" title
+ * 2. Create button: "New content" launches form (prominent action)
+ * 3. Nav items: Dashboard, Content Manager, Reports (with open report badge)
+ * 4. Spacer: Flexible space (flex: 1)
+ * 5. Worker status card: Local worker heartbeat + sign out button
+ */
+
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';

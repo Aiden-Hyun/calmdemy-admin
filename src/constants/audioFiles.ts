@@ -1,11 +1,38 @@
 /**
- * Audio file mapping for meditation and sleep content
+ * @fileoverview Audio file storage and retrieval for all meditation/sleep content.
  *
- * All audio files are hosted on Firebase Storage (private)
- * Use getAudioUrl() to get download URLs with access tokens
+ * ARCHITECTURAL ROLE:
+ * Central manifest and URL accessor for all audio assets.
+ * Handles two storage strategies: Firebase Storage (private) and external CDN (public).
  *
- * Sources: Fragrant Heart (meditations), Pixabay (sounds)
- * All audio is free for personal use.
+ * STORAGE STRATEGY:
+ * 1. Firebase Storage: Private, access-controlled audio files
+ *    - Require download tokens valid for ~7 days
+ *    - Cached client-side to minimize re-fetching
+ *    - Used for hosted audio (stories, courses, etc.)
+ *
+ * 2. External URLs (Fragrant Heart): Public, permanent URLs
+ *    - Pre-hosted on third-party CDN
+ *    - No token needed, no caching required
+ *    - Used for licensed meditation libraries
+ *
+ * DESIGN PATTERNS:
+ * - Registry Pattern: Maps audio keys to storage paths
+ * - Token Management: Automatic token refresh via download URLs
+ * - Caching Strategy: 30-minute TTL on access tokens
+ *
+ * DEPENDENCIES:
+ * - Firebase Storage: getDownloadURL() for private assets
+ * - External CDN: Direct HTTPS links for public assets
+ *
+ * CONSUMERS:
+ * - Player: Fetches audio URLs before playback
+ * - Content screens: Preload URLs on mount for performance
+ * - Background sounds: Loop indefinitely (use cached URLs)
+ *
+ * AUDIO SOURCES:
+ * - Fragrant Heart: Licensed meditation library (external)
+ * - Pixabay: Free-to-use ambient sounds
  */
 
 import { ref, getDownloadURL } from "firebase/storage";

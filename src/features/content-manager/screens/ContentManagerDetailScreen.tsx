@@ -1,3 +1,21 @@
+/**
+ * ARCHITECTURAL ROLE:
+ * Content detail screen showing full item info, editable metadata, change history, and related reports.
+ * Supports three main modes: view (read-only), edit (form with validation), and detail-panel sections.
+ *
+ * DESIGN PATTERNS:
+ * - **MVVM**: useContentManagerDetail hook provides all state and action callbacks
+ * - **Tab-Like UI**: Scroll through four sections: Overview, Edit, History, Reports
+ * - **Form State Machine**: isEditing flag toggles between view and edit modes
+ *   - View mode: read-only metadata display
+ *   - Edit mode: dynamic form fields + validation + save/cancel
+ * - **Conditional Rendering**: Different UI based on item.collection (course sessions show regen options, etc.)
+ *
+ * CONSUMERS:
+ * - Navigated from catalog screen with route params: { collection, id, reportId? }
+ * - Can drill into reports; reports screen can navigate back with selectedReportId
+ */
+
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -28,6 +46,10 @@ import {
 } from '../types';
 import { useContentManagerDetail } from '../hooks/useContentManager';
 
+/**
+ * Helper formatter for item duration in minutes (e.g., "23 min").
+ * Returns "Unknown" if missing or invalid.
+ */
 function formatDuration(durationMinutes?: number): string {
   if (!durationMinutes || durationMinutes <= 0) {
     return 'Unknown';
@@ -35,6 +57,10 @@ function formatDuration(durationMinutes?: number): string {
   return `${durationMinutes} min`;
 }
 
+/**
+ * Formats audit entry timestamp to readable short date/time.
+ * Used to display when each change was made in the change history timeline.
+ */
 function formatAuditTimestamp(entry: ContentManagerAuditEntry): string {
   const date = entry.createdAt?.toDate?.();
   if (!date) {
@@ -48,6 +74,10 @@ function formatAuditTimestamp(entry: ContentManagerAuditEntry): string {
   }).format(date);
 }
 
+/**
+ * Extracts admin name/identifier from audit entry.
+ * Prefers email if available; falls back to UID; returns "Unknown admin" if neither.
+ */
 function getAuditActorLabel(entry: ContentManagerAuditEntry): string {
   const email = String(entry.actorEmail || '').trim();
   if (email) return email;
@@ -55,6 +85,11 @@ function getAuditActorLabel(entry: ContentManagerAuditEntry): string {
   return uid || 'Unknown admin';
 }
 
+/**
+ * Cross-platform clipboard write helper.
+ * Tries expo-clipboard on mobile, navigator.clipboard on web.
+ * Returns true if successful, false if clipboard unavailable.
+ */
 async function copyTextToClipboard(text: string): Promise<boolean> {
   try {
     const clipboard = require('expo-clipboard');
@@ -74,6 +109,10 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
   return false;
 }
 
+/**
+ * Reusable section container component (like a card with title and optional action button).
+ * Used for Overview, Edit, History, Reports sections to maintain consistent layout.
+ */
 function SectionCard({
   title,
   action,
@@ -97,6 +136,10 @@ function SectionCard({
   );
 }
 
+/**
+ * Renders read-only metadata rows (Overview section).
+ * Filters out empty fields; applies monospace font to code-like values (IDs, paths).
+ */
 function MetadataRows({ item }: { item: ContentManagerItemDetail }) {
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
@@ -119,6 +162,19 @@ function MetadataRows({ item }: { item: ContentManagerItemDetail }) {
   );
 }
 
+/**
+ * Dynamic form field editor component. Renders different input types based on field definition:
+ * - text: TextInput single-line
+ * - textarea: TextInput multi-line
+ * - number: TextInput with numeric keyboard
+ * - select: Toggle-style options (single choice)
+ * - multiselect: Toggle-style options (multiple choices)
+ *
+ * VALIDATION:
+ * - Shows error message below field if validation fails (e.g., "required field")
+ * - Highlights with error color when error present
+ * - Clears error when user edits
+ */
 function MetadataFieldEditor({
   field,
   value,
@@ -135,6 +191,11 @@ function MetadataFieldEditor({
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
 
+  /**
+   * Renders option toggles for select/multiselect fields.
+   * Checkbox-style pills; clicking toggles selection.
+   * Single-select: exactly one selected (radio); Multi-select: zero or more selected.
+   */
   const renderOptions = () => {
     const selectedValues = Array.isArray(value) ? value : [];
     const selectedValue = !Array.isArray(value) ? String(value || '') : '';

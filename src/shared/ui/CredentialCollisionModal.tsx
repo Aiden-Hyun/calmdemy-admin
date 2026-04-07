@@ -1,3 +1,31 @@
+/**
+ * CredentialCollisionModal.tsx
+ *
+ * Architectural Role:
+ * Modal dialog that handles OAuth/auth provider conflicts. When a user tries to sign in
+ * with a provider (Google/Apple/email) but that credential is already linked to a different
+ * Calmdemy account, this modal presents two recovery options: sign in to the existing account
+ * or switch authentication methods.
+ *
+ * Design Patterns:
+ * - Modal State Container: Manages its own loading state during the async sign-in attempt.
+ *   Parent controls visibility. Follows a focused single-responsibility pattern.
+ * - Helper Functions for Polymorphism: Provider type detection functions (getProviderDisplayName,
+ *   getProviderIcon) handle the three provider types (google.com, apple.com, password) without
+ *   if-nesting in render code. Easy to extend for new providers.
+ * - Structured Error Recovery: Offers two paths (sign in existing account, use different method),
+ *   plus a helper note explaining the account linking requirement.
+ *
+ * Key Dependencies:
+ * - Firebase auth: AuthCredential type from Firebase SDK
+ * - ThemeContext: Colors for warning icon
+ * - useSafeAreaInsets: Respects notch/home indicator on all devices
+ *
+ * Consumed By:
+ * - Authentication flow (sign up/login screens)
+ * - Credential linking workflows
+ */
+
 import React, { useMemo, useState } from "react";
 import {
   View,
@@ -23,6 +51,10 @@ interface CredentialCollisionModalProps {
   onUseDifferentMethod: () => void;
 }
 
+/**
+ * Map Firebase provider identifiers to user-friendly display names.
+ * Allows the same modal to handle different auth methods with appropriate labels.
+ */
 const getProviderDisplayName = (
   providerType: "google.com" | "apple.com" | "password"
 ): string => {
@@ -38,6 +70,10 @@ const getProviderDisplayName = (
   }
 };
 
+/**
+ * Map Firebase provider identifiers to Ionicons icon names.
+ * Ensures consistent visual representation of each auth method in the UI.
+ */
 const getProviderIcon = (
   providerType: "google.com" | "apple.com" | "password"
 ): string => {
@@ -70,6 +106,10 @@ export function CredentialCollisionModal({
   const providerIcon = getProviderIcon(providerType);
   const displayAccount = email || `this ${providerName} account`;
 
+  /**
+   * Async wrapper for the sign-in callback. Manages loading state during the
+   * (potentially async) sign-in attempt so the UI can show a spinner.
+   */
   const handleSignInToOtherAccount = async () => {
     setIsLoading(true);
     try {

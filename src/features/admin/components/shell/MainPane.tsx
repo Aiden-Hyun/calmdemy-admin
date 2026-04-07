@@ -1,3 +1,27 @@
+/**
+ * Central content pane showing jobs list, factory metrics, and worker controls.
+ *
+ * ARCHITECTURAL ROLE:
+ * Middle column: displays all jobs in scrollable list, factory overview stats,
+ * worker log viewer, filter chips, and draft jobs section.
+ *
+ * DESIGN PATTERN:
+ * - Composite layout: FlatList with header (factory overview, filters, drafts)
+ * - Separation of concerns: Props passed through, no local state mutations
+ * - Responsive: Full width on mobile, flex-grow in 3-pane desktop
+ *
+ * CONTENT STRUCTURE:
+ * Header (sticky):
+ *   - FactoryOverview: Queue counts, worker heartbeat, controls
+ *   - WorkerLogsPanel: Log viewer with level/stack filtering
+ *   - FiltersRow: Status filter chips (All, Pending, Active, etc.)
+ *   - DraftsSection: Locally saved draft jobs
+ * Body:
+ *   - JobList: Hierarchical list (parent full_subject with child courses)
+ * Footer:
+ *   - Extra spacing for mobile scrolling
+ */
+
 import React, { useMemo } from 'react';
 import { View, StyleSheet } from 'react-native';
 import { useTheme } from '@core/providers/contexts/ThemeContext';

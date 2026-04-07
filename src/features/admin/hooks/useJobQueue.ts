@@ -1,3 +1,28 @@
+/**
+ * Comprehensive hook collection for job queue, timeline, worker, and draft management.
+ *
+ * ARCHITECTURAL ROLE:
+ * Collection of custom hooks exposing adminRepository functions as reactive subscriptions
+ * and memoized state. Provides job list, job detail, timeline, worker status, draft ops.
+ *
+ * DESIGN PATTERNS:
+ * - Subscription management: useEffect returns unsubscribe cleanups
+ * - Memoization: useMemo for expensive derived state (filtering, grouping)
+ * - State aggregation: Compose multiple data sources into single hook return
+ * - Facade pattern: Hide repository complexity behind clean hook interfaces
+ * - Focus effect: Drafts refresh when screen focuses (mobile navigation)
+ *
+ * HOOK CATEGORIES:
+ * 1. Job Queue: useJobQueue, useJobDetail, useChildJobs
+ * 2. Timeline: useJobStepTimeline
+ * 3. Worker: useWorkerStatus, useActiveJobWorkers, useWorkerControl, useWorkerStacks
+ * 4. Factory: useFactoryMetrics
+ * 5. Logs: useWorkerLogTail
+ * 6. Drafts: useDrafts
+ *
+ * Each hook handles loading states, subscription cleanup, and memoization appropriately.
+ */
+
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import {

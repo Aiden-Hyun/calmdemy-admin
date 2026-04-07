@@ -1,3 +1,22 @@
+/**
+ * ARCHITECTURAL ROLE:
+ * Main content catalog screen. Displays searchable, filterable list of all content items
+ * in the system. Supports filtering by type, access level, and thumbnail quality.
+ * Includes optional regeneration UI mode for triggering and monitoring thumbnail jobs.
+ *
+ * DESIGN PATTERNS:
+ * - **ViewModel Pattern**: useContentManagerCatalog hook provides filtered items and state
+ * - **State Machine**: Three orthogonal states tracked (isLoading, isRefreshing, error)
+ * - **Subscription Management**: subscribeToJob() creates Firestore listeners per regen request;
+ *   unsubscribes and timers cleaned up on unmount to prevent memory leaks
+ * - **Optional Regeneration Mode**: showRegeneration prop (from route params) toggles visible UI
+ *   Allows same component to be browsing mode or regeneration QA mode
+ *
+ * CONSUMERS:
+ * - Main navigation: /admin/content
+ * - Detail screen can navigate back and trigger refresh
+ */
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -36,6 +55,15 @@ import {
   ContentManagerItemSummary,
 } from '../types';
 
+/**
+ * Filter pill option definitions for type, access, and thumbnail filters.
+ * Options are readonly const arrays for safety; generated from type constants
+ * and mapping functions.
+ *
+ * TYPE_OPTIONS: All collections + 'all' option. Maps to ContentManagerTypeFilter.
+ * ACCESS_OPTIONS: Free, Premium, All. Maps to ContentManagerAccess.
+ * THUMBNAIL_OPTIONS: Missing/Web (QA), All. Used to find items needing regeneration.
+ */
 const TYPE_OPTIONS = [
   { id: 'all', label: 'All' },
   ...CONTENT_MANAGER_COLLECTIONS.map((collection) => ({
@@ -55,6 +83,20 @@ const THUMBNAIL_OPTIONS = [
   { id: 'missing_or_web', label: 'Missing / Web URL' },
 ] as const;
 
+/**
+ * Main catalog screen component. Provides search bar, filter pills, and FlatList of items.
+ *
+ * STATE OVERVIEW:
+ * - Hook state: items, filters, isLoading, isRefreshing, error (from useContentManagerCatalog)
+ * - Local state: regenStatus Map, submittingIds Set (for thumbnail regen tracking)
+ * - Refs: unsubscribesRef (job listeners), dismissTimersRef (status pill auto-dismiss timers)
+ *
+ * REGENERATION MODE:
+ * - showRegeneration flag determines if item cards show "Regenerate" button
+ * - Tracks live job status via subscribeToJob() Firestore listener
+ * - Status pills show job progress: pending→generating→completed or error
+ * - Auto-dismisses success/error states after 2 seconds
+ */
 export default function ContentManagerScreen() {
   const router = useRouter();
   const { theme } = useTheme();

@@ -1,3 +1,34 @@
+/**
+ * @file OnboardingScreen.tsx (Native)
+ *
+ * Architectural Role:
+ *   Multipage onboarding carousel for new/anonymous users. Educates on app features,
+ *   pricing tiers, and facilitates guest checkout (anonymous sign-in + subscription).
+ *   Part of the MVVM View layer for the auth feature.
+ *
+ * Design Patterns:
+ *   - Strategy: Platform-specific variant (native carousel; see OnboardingScreen.web.tsx for web stub)
+ *   - Carousel/Pager: Horizontal ScrollView with momentum scrolling for multi-page navigation
+ *   - State Deferral: Pending purchase is stored until auth completes, then executed (race condition safety)
+ *   - Theme Binding: Computes styles dynamically via useMemo to respond to theme changes
+ *
+ * Key Dependencies:
+ *   - AuthContext: useAuth() for user state, anonymous sign-in, and auth loading
+ *   - SubscriptionContext: useSubscription() for package data and purchase logic
+ *   - ThemeContext: useTheme() for colors and spacing
+ *   - onboardingStorage: markOnboardingSeen() to persist completion
+ *   - expo-router: useRouter() for navigation
+ *   - expo-linear-gradient: Animated gradient backgrounds per page
+ *
+ * Three-Page Flow:
+ *   Page 0: "Free content to begin" — highlights free meditation/sleep content
+ *   Page 1: "Psychology-based courses" — highlights premium CBT/ACT courses
+ *   Page 2: "Choose subscription" — plan selector and checkout
+ *
+ * Consumed By:
+ *   - expo-router on /onboarding route (new/anonymous users)
+ */
+
 import React, {
   useCallback,
   useEffect,
@@ -29,12 +60,14 @@ import {
 import { markOnboardingSeen } from "@features/auth/utils/onboardingStorage";
 import { Theme } from "@/theme";
 
+// Feature highlights for the free tier page
 const FREE_CONTENT_ITEMS = [
   { icon: "leaf-outline", label: "Guided meditations" },
   { icon: "moon-outline", label: "Sleep stories" },
   { icon: "musical-notes-outline", label: "White noise" },
 ] as const;
 
+// Feature highlights for the premium tier page
 const COURSE_ITEMS = [
   { icon: "school-outline", label: "Structured self-help" },
   { icon: "sparkles-outline", label: "CBT, ACT, and more" },
@@ -43,6 +76,10 @@ const COURSE_ITEMS = [
 
 type OnboardingDestination = "/login" | "/(tabs)/home";
 
+/**
+ * Helper for Pressable state styling. Applies pressed style dynamically when user taps.
+ * Used throughout for consistent press feedback without duplicating logic.
+ */
 const pressableStyle = (
   baseStyle: StyleProp<ViewStyle>,
   pressedStyle?: StyleProp<ViewStyle>
@@ -63,17 +100,28 @@ export default function OnboardingScreen() {
     isLoading: subscriptionLoading,
   } = useSubscription();
 
+  // Pagination state: 0 = free content, 1 = courses, 2 = subscribe
   const [activeIndex, setActiveIndex] = useState(0);
+  // Currently selected plan for purchase
   const [selectedPackage, setSelectedPackage] =
     useState<PurchasesPackage | null>(null);
+  // Deferred purchase: stored while signing in anonymously, then executed once auth completes
   const [pendingPackage, setPendingPackage] =
     useState<PurchasesPackage | null>(null);
+  // Tracks active purchase operation
   const [isPurchasing, setIsPurchasing] = useState(false);
+  // Tracks anonymous sign-in step during guest checkout flow
   const [isPreparingGuestCheckout, setIsPreparingGuestCheckout] =
     useState(false);
 
+  // Memoized styles prevent recreation on every render; updates only when theme changes
   const styles = useMemo(() => createStyles(theme, isDark), [theme, isDark]);
 
+  /**
+   * Resolve monthly package from RevenueCat offering.
+   * Tries explicit .monthly property first, then searches availablePackages by ID/name.
+   * Falls back to null if not found (UI disables plan selection).
+   */
   const monthlyPackage =
     currentOffering?.monthly ||
     currentOffering?.availablePackages?.find(
@@ -83,6 +131,11 @@ export default function OnboardingScreen() {
     ) ||
     null;
 
+  /**
+   * Resolve annual package from RevenueCat offering.
+   * Tries explicit .annual property first, then searches availablePackages.
+   * Matches both "annual" and "yearly" naming conventions.
+   */
   const annualPackage =
     currentOffering?.annual ||
     currentOffering?.availablePackages?.find(
@@ -93,6 +146,11 @@ export default function OnboardingScreen() {
     ) ||
     null;
 
+  /**
+   * Auto-select best plan when packages load.
+   * Prefers annual (higher LTV) but falls back to monthly.
+   * Uses (current ?? value) to never override user's manual selection.
+   */
   useEffect(() => {
     if (annualPackage) {
       setSelectedPackage((current) => current ?? annualPackage);
@@ -104,6 +162,11 @@ export default function OnboardingScreen() {
     }
   }, [annualPackage, monthlyPackage]);
 
+  /**
+   * Calculate annual plan savings percentage as a marketing badge.
+   * Example: monthly $9.99 * 12 = $119.88; annual $79.99 → 33% savings.
+   * Returns null if savings not meaningful (annual costs more) or packages unavailable.
+   */
   const annualSavings = useMemo(() => {
     if (!monthlyPackage || !annualPackage) return null;
 
@@ -117,13 +180,19 @@ export default function OnboardingScreen() {
     return savings > 0 ? savings : null;
   }, [annualPackage, monthlyPackage]);
 
-  // subscriptionLoading is intentionally excluded here — when currentOffering is
-  // absent the button is already disabled via !selectedPackage, and including
-  // subscriptionLoading caused the CTA to stay disabled after a cancelled
-  // purchase if isLoading was left true by an identity sync race.
+  /**
+   * CTA (Call-To-Action) busy state. Excludes subscriptionLoading intentionally:
+   * when currentOffering is absent, the button is already disabled via !selectedPackage.
+   * Including subscriptionLoading caused race condition bugs where button stayed disabled
+   * after user cancelled a purchase if the identity sync was still loading.
+   */
   const ctaBusy = isPurchasing || isPreparingGuestCheckout;
   const isLoadingPackages = subscriptionLoading && !currentOffering;
 
+  /**
+   * Complete onboarding and navigate to destination.
+   * Persists onboarding completion flag and clears IndexScreen's check.
+   */
   const completeOnboarding = useCallback(
     async (target: OnboardingDestination) => {
       await markOnboardingSeen();
@@ -132,6 +201,11 @@ export default function OnboardingScreen() {
     [router]
   );
 
+  /**
+   * Execute purchase and advance to home on success.
+   * Returns boolean for caller to handle failure (e.g., user cancelled, payment declined).
+   * Always resets isPurchasing to allow retries.
+   */
   const executePurchase = useCallback(
     async (pkg: PurchasesPackage): Promise<boolean> => {
       setIsPurchasing(true);
@@ -149,6 +223,11 @@ export default function OnboardingScreen() {
     [completeOnboarding, purchasePackage]
   );
 
+  /**
+   * Deferred purchase handler: executes pending purchase once auth + subscription context stabilize.
+   * Pattern: Guest taps "Subscribe" → sign in anonymously → once user exists, execute purchase.
+   * Prevents race conditions by waiting for authLoading and subscriptionLoading to settle.
+   */
   useEffect(() => {
     if (
       !pendingPackage ||
@@ -160,6 +239,7 @@ export default function OnboardingScreen() {
       return;
     }
 
+    // Clear pending state and execute once all conditions met
     const pkg = pendingPackage;
     setPendingPackage(null);
     void executePurchase(pkg);
@@ -172,6 +252,10 @@ export default function OnboardingScreen() {
     user,
   ]);
 
+  /**
+   * Navigate to a specific page (0-2) with animated scroll.
+   * Clamps index and skips scroll if already on page 2 (subscription page).
+   */
   const goToPage = useCallback(
     (index: number, animated = true) => {
       const nextIndex = Math.max(0, Math.min(index, 2));
@@ -186,12 +270,20 @@ export default function OnboardingScreen() {
     [width]
   );
 
+  /**
+   * Advance one page or reach the subscription page.
+   * Wired to "Next" button in header.
+   */
   const handleNext = useCallback(() => {
     if (activeIndex < 2) {
       goToPage(activeIndex + 1);
     }
   }, [activeIndex, goToPage]);
 
+  /**
+   * Update activeIndex when user manually swipes.
+   * Fired by onMomentumScrollEnd on the horizontal ScrollView.
+   */
   const handlePagerEnd = useCallback(
     (event: {
       nativeEvent: { contentOffset: { x: number } };
@@ -202,20 +294,34 @@ export default function OnboardingScreen() {
     [width]
   );
 
+  /**
+   * Complete onboarding and navigate to login screen.
+   * Allows users to skip onboarding and create a named account later.
+   */
   const handleSignIn = useCallback(async () => {
     await completeOnboarding("/login");
   }, [completeOnboarding]);
 
+  /**
+   * Handle subscription button press.
+   * Two flows:
+   * 1. No user: Sign in anonymously first (guest checkout), then queue purchase via pendingPackage
+   * 2. User exists: Execute purchase immediately
+   *
+   * The pendingPackage effect will kick in once auth completes, executing the queued purchase.
+   */
   const handleSubscribe = useCallback(async () => {
     if (!selectedPackage || isPurchasing) {
       return;
     }
 
     if (!user) {
+      // Guest checkout: queue purchase and sign in anonymously
       try {
         setPendingPackage(selectedPackage);
         setIsPreparingGuestCheckout(true);
         await signInAnonymously();
+        // Once signInAnonymously completes, pendingPackage effect will fire executePurchase
       } catch (error: any) {
         setPendingPackage(null);
         Alert.alert(
@@ -228,14 +334,18 @@ export default function OnboardingScreen() {
       return;
     }
 
+    // User already exists; execute purchase directly
     const success = await executePurchase(selectedPackage);
     if (!success) {
-      // User cancelled or purchase failed; ensure state is fully reset for retries
+      // User cancelled or payment failed; reset for retry
       setPendingPackage(null);
       setIsPreparingGuestCheckout(false);
     }
   }, [executePurchase, isPurchasing, selectedPackage, signInAnonymously, user]);
 
+  /**
+   * Render feature list with icons. Used on pages 0 and 1 of the carousel.
+   */
   const renderFeatureList = (
     items: ReadonlyArray<{
       icon: keyof typeof Ionicons.glyphMap;
@@ -254,6 +364,10 @@ export default function OnboardingScreen() {
     </View>
   );
 
+  /**
+   * Render a subscription plan card with toggle, price, and highlight badge.
+   * Disabled if pkg is null (plan not loaded from RevenueCat).
+   */
   const renderPlanCard = (
     title: string,
     description: string,
@@ -301,6 +415,11 @@ export default function OnboardingScreen() {
     );
   };
 
+  /**
+   * Render header action button based on current page.
+   * Pages 0-1: "Next" button advances carousel
+   * Page 2: "Sign In" button skips subscribe and goes to login
+   */
   const renderHeaderAction = () => {
     if (activeIndex === 2) {
       return (
@@ -325,6 +444,10 @@ export default function OnboardingScreen() {
     );
   };
 
+  /**
+   * Render page 2: subscription selection and checkout.
+   * Shows plan cards, calculates savings, and triggers handleSubscribe on CTA.
+   */
   const renderSubscribePage = () => (
     <ScrollView
       style={styles.subscribePage}
@@ -332,6 +455,7 @@ export default function OnboardingScreen() {
       showsVerticalScrollIndicator={false}
       bounces={false}
     >
+      {/* Hero section with gradient and copy */}
       <LinearGradient
         colors={
           isDark
@@ -411,6 +535,7 @@ export default function OnboardingScreen() {
         {renderHeaderAction()}
       </View>
 
+      {/* Carousel pages 0 and 1 */}
       {activeIndex < 2 ? (
         <ScrollView
           ref={scrollRef}

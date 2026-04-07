@@ -1,3 +1,49 @@
+/**
+ * Provider Management Hook - Multi-Method Authentication
+ *
+ * ARCHITECTURAL ROLE:
+ * High-level ViewModel hook for managing multiple sign-in methods (Google, Apple, Email)
+ * on a single account. Handles linking/unlinking providers, switching accounts,
+ * password reset, and credential collision errors (when same email used across providers).
+ *
+ * DESIGN PATTERNS:
+ * - Provider Registry: Tracks linked vs available providers (cannot link twice)
+ * - Error Categorization: Distinguishes collision errors (special handling) from others
+ * - Safety Checks: Prevents unlinking last provider (account lockout protection)
+ * - Alternative Flow Detection: Before switching, ensures fallback provider exists
+ *
+ * KEY RESPONSIBILITIES:
+ * 1. Display linked providers (Google, Apple, Email)
+ * 2. Suggest available providers to add
+ * 3. Link new provider with error handling
+ * 4. Unlink provider (with safety check for last provider)
+ * 5. Switch provider account (unlink old, link new)
+ * 6. Handle credential collision errors (email linked to different Google account)
+ * 7. Change email address and reset password flows
+ *
+ * COLLISION ERROR NOTES:
+ * When user tries to link Google with email X, but X already exists in Firebase
+ * under different account, we get CredentialCollisionError. Special UI flow lets user:
+ * 1. Sign in with the colliding credential (switch accounts)
+ * 2. OR cancel and use different email
+ * This hook exposes collisionError and signInWithCollisionCredential for that flow.
+ *
+ * CONSUMERS:
+ * - Account settings screens: Manage providers and email
+ * - Linked accounts view: Show which providers connected
+ * - Credential collision dialog: Handle collision errors
+ *
+ * DEPENDENCIES:
+ * - useAuth: Access to link/unlink/changeEmail functions
+ * - Firebase Auth: Underlying provider management
+ *
+ * IMPORTANT NOTES:
+ * - User must always have at least one linked provider
+ * - Switching provider requires another provider as fallback
+ * - Apple sign-in only available on iOS (isAppleSignInAvailable check)
+ * - Collision errors require special handling (separate UI flow)
+ */
+
 import { useState, useCallback } from "react";
 import { Alert } from "react-native";
 import { AuthCredential } from "firebase/auth";
@@ -31,6 +77,11 @@ interface UseProviderManagementReturn {
   signInWithCollisionCredential: () => Promise<void>;
 }
 
+/**
+ * PROVIDER DISPLAY METADATA
+ * Maps Firebase provider IDs to user-friendly names and icons.
+ * Used for provider list UI and alerts.
+ */
 const PROVIDER_DISPLAY_INFO: Record<
   string,
   { displayName: string; icon: string }
@@ -40,6 +91,20 @@ const PROVIDER_DISPLAY_INFO: Record<
   password: { displayName: "Email & Password", icon: "mail" },
 };
 
+/**
+ * useProviderManagement Hook
+ *
+ * Manage multiple sign-in methods (Google, Apple, Email) on a user account.
+ *
+ * @returns Object with provider lists, loading state, and action methods for linking/unlinking
+ *
+ * USAGE EXAMPLE:
+ *   const providers = useProviderManagement();
+ *   // Show linked providers
+ *   providers.linkedProviders.map(p => <Text>{p.displayName}</Text>)
+ *   // Link new provider
+ *   <Button onPress={providers.linkGoogleProvider}>Connect Google</Button>
+ */
 export function useProviderManagement(): UseProviderManagementReturn {
   const {
     user,
@@ -53,12 +118,33 @@ export function useProviderManagement(): UseProviderManagementReturn {
     isAppleSignInAvailable,
   } = useAuth();
 
+  /**
+   * LOCAL STATE
+   * isLoading: Action in progress (link/unlink/switch) - shows loading spinners
+   * error: General error message from failed operations
+   * collisionError: Special error type when email already linked to different account
+   */
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [collisionError, setCollisionError] =
     useState<CredentialCollisionError | null>(null);
 
-  // Get linked providers from current user
+  /**
+   * LINKED PROVIDERS - Derived from Firebase User object
+   * Transform Firebase providerData into UI-friendly ProviderInfo objects.
+   * Used to show which methods are already connected to this account.
+   *
+   * EXAMPLE:
+   * Firebase user.providerData = [
+   *   { providerId: 'google.com', email: 'user@gmail.com' },
+   *   { providerId: 'password', email: 'user@example.com' },
+   * ]
+   * Maps to:
+   * [
+   *   { providerId: 'google.com', displayName: 'Google', email: 'user@gmail.com', icon: '...' },
+   *   { providerId: 'password', displayName: 'Email & Password', email: 'user@example.com', icon: '...' },
+   * ]
+   */
   const linkedProviders: ProviderInfo[] = (user?.providerData || []).map(
     (provider) => ({
       providerId: provider.providerId,
@@ -70,7 +156,20 @@ export function useProviderManagement(): UseProviderManagementReturn {
     })
   );
 
-  // Determine which providers can still be added
+  /**
+   * AVAILABLE PROVIDERS - Providers not yet linked
+   * Calculate which sign-in methods user can still add.
+   * Can't link same provider twice (linkGoogleProvider after already linked fails).
+   * Apple only available on iOS (isAppleSignInAvailable check).
+   *
+   * LOGIC:
+   * For each provider:
+   * 1. Check if already linked
+   * 2. Check if available on platform (Apple only on iOS)
+   * 3. If not linked AND available, add to availableProviders list
+   *
+   * This list is shown in "Add Sign-In Method" screen for user to choose from.
+   */
   const linkedProviderIds = linkedProviders.map((p) => p.providerId);
   const availableProviders: ProviderInfo[] = [];
 
@@ -96,10 +195,29 @@ export function useProviderManagement(): UseProviderManagementReturn {
     });
   }
 
+  /**
+   * CLEAR COLLISION ERROR (useCallback)
+   * Dismiss collision error dialog after user resolves it.
+   * Called when user chooses to sign in with collision credential or cancel.
+   */
   const clearCollisionError = useCallback(() => {
     setCollisionError(null);
   }, []);
 
+  /**
+   * HANDLE ERROR HELPER (useCallback)
+   * Categorize error and show appropriate UI feedback.
+   *
+   * TWO ERROR PATHS:
+   * 1. CredentialCollisionError: Email already exists on different account
+   *    - Store in collisionError state for special collision UI flow
+   *    - Don't show alert (handled by separate UI flow)
+   * 2. Other errors: Show alert to user
+   *    - Log to console for debugging
+   *    - Store error message in state
+   *
+   * DEPENDENCY: [] (pure function wrapper)
+   */
   const handleError = useCallback((err: any, action: string) => {
     if (err instanceof CredentialCollisionError) {
       setCollisionError(err);
@@ -110,6 +228,19 @@ export function useProviderManagement(): UseProviderManagementReturn {
     Alert.alert("Error", err.message || `Failed to ${action}`);
   }, []);
 
+  /**
+   * LINK GOOGLE PROVIDER (useCallback)
+   * Add Google sign-in to user's account. Shows native Google sign-in UI.
+   *
+   * ERROR HANDLING:
+   * - Collision: Email already linked to different Google account (see handleError)
+   * - Others: Show alert with error message
+   *
+   * SUCCESS:
+   * Show confirmation alert. User can now sign in with Google from login screen.
+   *
+   * DEPENDENCY: [linkProvider, handleError]
+   */
   const linkGoogleProvider = useCallback(async () => {
     setIsLoading(true);
     setError(null);
@@ -123,6 +254,17 @@ export function useProviderManagement(): UseProviderManagementReturn {
     }
   }, [linkProvider, handleError]);
 
+  /**
+   * LINK APPLE PROVIDER (useCallback)
+   * Add Apple sign-in to user's account (iOS only). Shows native Apple sign-in UI.
+   *
+   * SAME PATTERN AS LINK GOOGLE:
+   * - Show Apple native dialog
+   * - Handle collision/errors
+   * - Show success alert
+   *
+   * DEPENDENCY: [linkProvider, handleError]
+   */
   const linkAppleProvider = useCallback(async () => {
     setIsLoading(true);
     setError(null);
@@ -136,6 +278,20 @@ export function useProviderManagement(): UseProviderManagementReturn {
     }
   }, [linkProvider, handleError]);
 
+  /**
+   * LINK EMAIL PROVIDER (useCallback)
+   * Add email/password sign-in to user's account.
+   *
+   * REQUIRED PARAMETERS:
+   * - email: Unique email address for password recovery
+   * - password: User's chosen password (must meet strength requirements)
+   *
+   * NON-OBVIOUS:
+   * User can link email even if they signed up with Google/Apple.
+   * This allows password-based login as fallback if social services are down.
+   *
+   * DEPENDENCY: [linkProvider, handleError]
+   */
   const linkEmailProvider = useCallback(
     async (email: string, password: string) => {
       setIsLoading(true);
@@ -152,6 +308,22 @@ export function useProviderManagement(): UseProviderManagementReturn {
     [linkProvider, handleError]
   );
 
+  /**
+   * UNLINK PROVIDER (useCallback)
+   * Remove sign-in method from account.
+   *
+   * SAFETY CHECK:
+   * If user has only 1 provider, prevent unlinking (would lock them out).
+   * Show alert: "You must have at least one sign-in method"
+   * Force user to link new provider first.
+   *
+   * SUCCESS:
+   * Show confirmation. User can no longer sign in with this method.
+   * Other linked methods still work.
+   *
+   * DEPENDENCY: [unlinkProvider, linkedProviders.length, handleError]
+   * Includes linkedProviders.length for safety check.
+   */
   const unlinkProviderById = useCallback(
     async (providerId: string) => {
       if (linkedProviders.length <= 1) {
@@ -176,6 +348,30 @@ export function useProviderManagement(): UseProviderManagementReturn {
     [unlinkProvider, linkedProviders.length, handleError]
   );
 
+  /**
+   * SWITCH GOOGLE ACCOUNT (useCallback)
+   * Unlink current Google account and link different Google account.
+   *
+   * SAFETY CHECK:
+   * Before switching, ensure user has another provider (Email or Apple).
+   * If only Google linked, prevent switch (would lock them out).
+   * Alert message explains to add Email/Apple first.
+   *
+   * FLOW:
+   * 1. Verify alternative provider exists
+   * 2. Show native Google sign-in for new Google account
+   * 3. Unlink old Google
+   * 4. Link new Google
+   * 5. Show success alert
+   *
+   * ERROR HANDLING:
+   * If user cancels Google sign-in (getGoogleCredential returns null), exit silently.
+   *
+   * USE CASE:
+   * User wants to link different Google account (e.g., work account instead of personal).
+   *
+   * DEPENDENCY: [linkedProviders, getGoogleCredential, unlinkProvider, linkProvider, handleError]
+   */
   const switchGoogleAccount = useCallback(async () => {
     // Check if user has another provider to fall back on
     const hasOtherProvider = linkedProviders.some(
@@ -218,6 +414,18 @@ export function useProviderManagement(): UseProviderManagementReturn {
     handleError,
   ]);
 
+  /**
+   * SWITCH APPLE ACCOUNT (useCallback)
+   * Unlink current Apple account and link different Apple account (iOS only).
+   *
+   * SAME PATTERN AS SWITCH GOOGLE:
+   * - Safety check for fallback provider
+   * - Get new Apple credential from native UI
+   * - Unlink old, link new
+   * - Show success
+   *
+   * DEPENDENCY: [linkedProviders, getAppleCredential, unlinkProvider, linkProvider, handleError]
+   */
   const switchAppleAccount = useCallback(async () => {
     // Check if user has another provider to fall back on
     const hasOtherProvider = linkedProviders.some(
@@ -260,6 +468,21 @@ export function useProviderManagement(): UseProviderManagementReturn {
     handleError,
   ]);
 
+  /**
+   * CHANGE EMAIL ADDRESS (useCallback)
+   * Update email address for password-based sign-in.
+   *
+   * REQUIRED:
+   * - newEmail: New email address (must be unique across all Firebase accounts)
+   * - password: User's current password (for re-authentication)
+   *
+   * PROCESS:
+   * 1. Re-authenticate user with password (security check)
+   * 2. Update email in Firebase Auth
+   * 3. Show confirmation alert
+   *
+   * DEPENDENCY: [changeEmail, handleError]
+   */
   const changeEmailAddress = useCallback(
     async (newEmail: string, password: string) => {
       setIsLoading(true);
@@ -276,6 +499,20 @@ export function useProviderManagement(): UseProviderManagementReturn {
     [changeEmail, handleError]
   );
 
+  /**
+   * RESET PASSWORD (useCallback)
+   * Send password reset email to user's email address.
+   *
+   * PARAMETER:
+   * - email: Email to send reset link to (must be registered in Firebase)
+   *
+   * ANTI-ENUMERATION:
+   * Always show same success message regardless of whether email exists.
+   * This prevents attackers from discovering which emails are registered.
+   * Legitimate users can verify by checking email inbox.
+   *
+   * DEPENDENCY: [sendPasswordReset]
+   */
   const resetPassword = useCallback(
     async (email: string) => {
       setIsLoading(true);
@@ -287,7 +524,7 @@ export function useProviderManagement(): UseProviderManagementReturn {
           "Check your inbox for password reset instructions."
         );
       } catch (err: any) {
-        // Generic message for anti-enumeration
+        // Anti-enumeration: always show same message (don't reveal if email exists)
         Alert.alert(
           "Email Sent",
           "If an account exists with this email, you'll receive reset instructions."
@@ -299,6 +536,26 @@ export function useProviderManagement(): UseProviderManagementReturn {
     [sendPasswordReset]
   );
 
+  /**
+   * SIGN IN WITH COLLISION CREDENTIAL (useCallback)
+   * Handle credential collision error by signing in with the colliding credential.
+   *
+   * SCENARIO:
+   * 1. User has account A with email@gmail.com (via Email signup)
+   * 2. User tries to link Google
+   * 3. Google returns same email@gmail.com
+   * 4. Firebase detects collision - this email already has Email provider
+   * 5. collisionError is set (contains the credential from Google)
+   * 6. User taps "Sign In" in collision UI
+   * 7. This function uses stored credential to sign in to Account A
+   *
+   * AFTER COLLISION RESOLUTION:
+   * - User logged into Account A
+   * - Google credential is now linked (no more collision)
+   * - Clear collision state to dismiss dialog
+   *
+   * DEPENDENCY: [collisionError, signInWithPendingCredential, handleError]
+   */
   const signInWithCollisionCredential = useCallback(async () => {
     if (!collisionError?.pendingCredential) {
       return;
@@ -314,6 +571,25 @@ export function useProviderManagement(): UseProviderManagementReturn {
     }
   }, [collisionError, signInWithPendingCredential, handleError]);
 
+  /**
+   * RETURN VALUE - Interface for account settings screens
+   *
+   * STATE:
+   * - linkedProviders: Currently linked sign-in methods (Google, Apple, Email)
+   * - availableProviders: Methods that can still be added
+   * - isLoading: Action in progress (show spinner on buttons)
+   * - error: General error message from failed action
+   * - collisionError: Special error when email already linked to different account
+   *
+   * ACTIONS:
+   * - linkGoogleProvider/linkAppleProvider/linkEmailProvider(): Add sign-in method
+   * - unlinkProviderById(id): Remove sign-in method (with safety check)
+   * - switchGoogleAccount/switchAppleAccount(): Change which account linked
+   * - changeEmailAddress(email, password): Update email for password login
+   * - resetPassword(email): Send password reset email
+   * - signInWithCollisionCredential(): Resolve email collision
+   * - clearCollisionError(): Dismiss collision dialog
+   */
   return {
     linkedProviders,
     availableProviders,

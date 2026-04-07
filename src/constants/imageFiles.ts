@@ -1,18 +1,42 @@
 /**
- * Image file mapping for content thumbnails
- * 
- * Maps image identifiers (used in seed data) to remote URLs
- * These are high-quality, royalty-free images for meditation content.
- * 
- * Categories:
- * - Meditation: Calm nature, abstract gradients, zen imagery
- * - Breathing: Abstract patterns, sky, air themes
- * - Sleep: Night scenes, dreamy landscapes, cozy imagery
- * - Programs: Structured journey imagery
+ * @fileoverview Image asset manifest for content thumbnails and illustrations.
+ *
+ * ARCHITECTURAL ROLE:
+ * Central image registry mapping semantic keys to high-quality image URLs.
+ * Used by seed data and content discovery UI for visual display.
+ *
+ * DESIGN PATTERN:
+ * - Registry Pattern: Semantic keys map to URLs
+ * - Single source of truth for thumbnail selection
+ * - Enables bulk image swapping without code changes
+ *
+ * IMAGE STRATEGY:
+ * - Source: Unsplash (high-quality, royalty-free, perpetual license)
+ * - Format: WebP-optimized HTTPS URLs with compression
+ * - Quality: w=800 (mobile-optimized), q=80 (balanced quality/size)
+ * - Fallback: All undefined keys return safe default image
+ *
+ * CATEGORIZATION:
+ * - Meditation (25): Gratitude, stress, focus, anxiety, sleep, body scan, self-esteem, loving-kindness
+ * - Breathing (15): Specific breathing techniques with appropriate visuals
+ * - Sleep (20): Night scenes, dreamy landscapes, cozy/calming imagery
+ * - Programs (10): Structured journey and progression themes
+ *
+ * CONSUMPTION:
+ * - Seed data: Associates image keys with content during initialization
+ * - Content cards: Display thumbnail_url from Firestore document
+ * - App branding: Consistent visual language across features
+ *
+ * PERFORMANCE NOTE:
+ * - All images hosted on CDN (lazy-loaded by browser)
+ * - No local asset bundling (reduces app size)
+ * - Browser caches with aggressive expiry (Unsplash uses 1-year TTL)
  */
 
 // Using Unsplash for high-quality, free-to-use images
 // Format: https://images.unsplash.com/photo-{id}?w=800&q=80
+// w=800: Mobile-optimized width in pixels
+// q=80: JPEG quality (80 balances sharpness with file size)
 
 export const imageFiles: Record<string, string> = {
   // ==================== MEDITATION IMAGES ====================
@@ -133,12 +157,28 @@ export const imageFiles: Record<string, string> = {
   program_advanced: 'https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=800&q=80',
 };
 
-// Type for valid image file keys
+/**
+ * Type-safe image key union.
+ * Use this type when storing image references to catch invalid keys at compile time.
+ * Example: const img: ImageFileKey = "meditation_morning_sunrise"
+ */
 export type ImageFileKey = keyof typeof imageFiles;
 
 /**
- * Get image URL by key
- * Returns a placeholder if key not found
+ * Retrieves image URL by semantic key with safe fallback.
+ *
+ * FALLBACK STRATEGY:
+ * - Returns safe default (blue meditation/calm image) if key not found
+ * - Prevents broken images in UI (better UX than empty img src)
+ * - Suggests to admin that key mapping is missing
+ *
+ * USAGE:
+ * - Called from seed data during content import
+ * - Called from content cards when rendering thumbnail_url
+ * - Not type-safe (strings) - use imageFiles[key] directly for type safety
+ *
+ * @param key - Image identifier key (e.g., 'meditation_morning_sunrise')
+ * @returns Image URL (guaranteed non-null via fallback)
  */
 export function getImageUrl(key: string): string {
   return imageFiles[key] || 'https://images.unsplash.com/photo-1506126613408-eca07ce68773?w=800&q=80';

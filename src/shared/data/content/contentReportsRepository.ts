@@ -36,7 +36,12 @@ import { db } from "@/firebase";
 import { ContentReportStatus, ReportCategory } from "@/types";
 
 const contentReportsCollection = collection(db, "content_reports");
-// Initial status for all new reports - workflow state
+
+/**
+ * Initial workflow status for newly reported content.
+ * All user-submitted reports start in "open" state for admin review.
+ * Admin moderators update this to "resolved" or "dismissed" after action.
+ */
 const DEFAULT_REPORT_STATUS: ContentReportStatus = "open";
 
 /**
@@ -77,19 +82,25 @@ export async function reportContent(
   description?: string
 ): Promise<boolean> {
   try {
-    // Append-only write: each report is a unique document
+    // Append-only write: each report is a unique document with auto-generated ID
+    // Reports are immutable (not updated after creation, only read for review)
+    // Moderators don't update these docs; admin dashboard creates separate audit records
     await addDoc(contentReportsCollection, {
       user_id: userId,
       content_id: contentId,
       content_type: contentType,
       category,
-      description: description || null, // Allow omission but store null to be explicit
-      status: DEFAULT_REPORT_STATUS, // Initially "open" for moderation review
-      reported_at: serverTimestamp(),
+      // Store null explicitly if no description provided (vs undefined)
+      // Easier to query: allReports.where("description", "==", null)
+      description: description || null,
+      status: DEFAULT_REPORT_STATUS, // Initially "open" for moderation review workflow
+      reported_at: serverTimestamp(), // Server-side timestamp for audit trail
     });
     return true;
   } catch (error) {
     console.error("Error reporting content:", error);
+    // Return false rather than throwing: gracefully handle Firestore unavailability
+    // UI can show "Report failed, try again later" without crashing
     return false;
   }
 }

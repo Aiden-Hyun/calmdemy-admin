@@ -1,3 +1,21 @@
+/**
+ * ARCHITECTURAL ROLE:
+ * Content report card for moderation inbox. Displays report metadata (content, category, status, timeline),
+ * user-provided report description, admin resolution options (resolve/reopen), and optional "open content" link.
+ *
+ * DESIGN PATTERNS:
+ * - **Presentational Component**: No local state; all state managed by parent screen (noteDraft, isUpdating)
+ * - **State Machine UI**: Renders different actions based on report.status:
+ *   - 'open': Show resolution note input + Resolve button
+ *   - 'resolved': Show resolution note (read-only) + Reopen button
+ * - **Enrichment Pattern**: Uses ContentManagerReportSummary enriched with contentTitle/identifier
+ *   from getContentManagerItemDetail() in repository layer
+ *
+ * CONSUMERS:
+ * - ContentManagerReportsScreen FlatList rendering moderation inbox
+ * - Selected report detail view in ContentManagerDetailScreen
+ */
+
 import React, { useMemo } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,6 +27,10 @@ import {
   ContentManagerReportSummary,
 } from '../types';
 
+/**
+ * Formats Firestore Timestamp to short date/time string for UI display.
+ * Example: "Mar 15, 2:30 PM". Falls back to "Just now" if timestamp missing.
+ */
 function formatReportedAt(report: ContentManagerReportSummary): string {
   const date = report.reportedAt?.toDate?.();
   if (!date) {
@@ -33,6 +55,20 @@ interface Props {
   onOpenContent?: (report: ContentManagerReportSummary) => void;
 }
 
+/**
+ * Renders a single content report card in the moderation inbox.
+ *
+ * LAYOUT:
+ * - Header: content title, status badge, unsupported/selected badges
+ * - Metadata: type, identifier, category, status, reported timestamp
+ * - Description: User's report comment (or "No extra details...")
+ * - Resolution: Show/edit resolution note if report resolved
+ * - Actions: Resolve/Reopen buttons, optional "Open Content" link, note input
+ *
+ * STATE MACHINE:
+ * - open → Accepting resolution note input + resolve button
+ * - resolved → Showing resolution note read-only + reopen button
+ */
 export function ContentManagerReportCard({
   report,
   noteDraft,

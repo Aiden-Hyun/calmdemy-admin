@@ -1,3 +1,29 @@
+/**
+ * Top-level admin dashboard shell (3-pane layout).
+ *
+ * ARCHITECTURAL ROLE:
+ * Orchestrates layout and state for dashboard, content manager, and reports views.
+ * Coordinates sidebar navigation, main job list/form, and job detail inspector.
+ *
+ * DESIGN PATTERN:
+ * - Shell pattern: Sidebar + MainPane + InspectorPane (responsive 3-pane grid)
+ * - State lift: Selected job ID managed here, passed to inspector for detail view
+ * - Navigation aggregator: Routes sidebar nav to parent screen
+ *
+ * LAYOUT:
+ * +----------+---------------------+-----------+
+ * | Sidebar  | MainPane            | Inspector |
+ * | Nav      | (Jobs list, Form)   | (Selected |
+ * | Worker   | Filters, Factory OV | Job       |
+ * | Card     | Worker logs         | Details)  |
+ * +----------+---------------------+-----------+
+ *
+ * COORDINATOR:
+ * Receives all dashboard state (jobs, filters, worker status, etc.) from parent.
+ * Splits props logically: Sidebar gets nav items, MainPane gets list/factory data,
+ * InspectorPane gets selected job ID and resolves its full detail.
+ */
+
 import React, { useMemo, useState } from 'react';
 import { View, StyleSheet } from 'react-native';
 import { useTheme } from '@core/providers/contexts/ThemeContext';

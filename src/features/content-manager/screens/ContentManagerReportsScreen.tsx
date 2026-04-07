@@ -1,3 +1,20 @@
+/**
+ * ARCHITECTURAL ROLE:
+ * Content moderation inbox screen. Displays all user-reported content items with filtering
+ * and resolution workflow (mark open/resolved with optional admin note).
+ *
+ * DESIGN PATTERNS:
+ * - **MVVM**: useContentManagerReportsInbox hook provides filtered reports and mutations
+ * - **State Machine**: Report status is 'open' or 'resolved'; UI offers different actions per state
+ * - **Draft Pattern**: noteDrafts state holds in-progress resolution notes per report
+ *   Prevents data loss if admin navigates away mid-edit
+ *
+ * CONSUMERS:
+ * - Main navigation: /admin/content/reports
+ * - Detail screen navigates back with selectedReportId to show report in sidebar
+ * - Badge on main nav shows open count
+ */
+
 import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -24,6 +41,14 @@ import {
   ContentManagerReportSummary,
 } from '../types';
 
+/**
+ * Filter pill options for status, type, and category.
+ * Generated from type constants and mappings for consistency.
+ *
+ * STATUS_OPTIONS: Open, Resolved, All (moderation workflow states)
+ * TYPE_OPTIONS: All supported content types + "Unsupported" (for unknown content types)
+ * CATEGORY_OPTIONS: All report categories (audio_issue, wrong_content, inappropriate, other)
+ */
 const STATUS_OPTIONS = [
   { id: 'open', label: 'Open' },
   { id: 'resolved', label: 'Resolved' },
@@ -49,6 +74,19 @@ const CATEGORY_OPTIONS = [
   ),
 ] as const;
 
+/**
+ * Main reports (moderation inbox) screen component.
+ *
+ * STATE OVERVIEW:
+ * - Hook state: reports, filters, openCount, isLoading, isRefreshing, updatingReportId, error
+ * - Local state: noteDrafts (Map of reportId → resolution note draft)
+ *
+ * INTERACTIONS:
+ * - Search bar: substring search across content title/type/description
+ * - Filter pills: status (open/resolved), type (collection), category (report reason)
+ * - Each report card: resolve (with optional note) or reopen, open linked content
+ * - Shows success message on status change (auto-dismisses after 2 seconds)
+ */
 export default function ContentManagerReportsScreen() {
   const router = useRouter();
   const { theme } = useTheme();
@@ -71,6 +109,10 @@ export default function ContentManagerReportsScreen() {
     updateStatus,
   } = useContentManagerReportsInbox();
 
+  /**
+   * Callback: Update draft resolution note for a report.
+   * Stored in local noteDrafts state; cleared after successful save.
+   */
   const handleChangeNote = (reportId: string, note: string) => {
     setNoteDrafts((current) => ({
       ...current,
@@ -78,14 +120,27 @@ export default function ContentManagerReportsScreen() {
     }));
   };
 
+  /**
+   * Callback: Resolve a report (transition open → resolved).
+   * Includes optional resolution note from noteDrafts.
+   */
   const handleResolve = async (reportId: string, note?: string) => {
     await updateStatus(reportId, 'resolved', note);
   };
 
+  /**
+   * Callback: Reopen a report (transition resolved → open).
+   * Clears any existing resolution note.
+   */
   const handleReopen = async (reportId: string) => {
     await updateStatus(reportId, 'open');
   };
 
+  /**
+   * Callback: Navigate to detail screen for the reported content.
+   * Only enabled if report.isSupported (content type is in supported collections).
+   * Passes reportId to detail screen so it can highlight this report in the sidebar.
+   */
   const handleOpenContent = (report: ContentManagerReportSummary) => {
     if (!report.supportedLink) {
       return;

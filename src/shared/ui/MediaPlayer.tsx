@@ -1,3 +1,33 @@
+/**
+ * MediaPlayer.tsx
+ *
+ * Architectural Role:
+ * Comprehensive audio player component for meditations, courses, and sleep content.
+ * Orchestrates audio playback, UI state (favorite, download, ratings, sleep timer, background audio),
+ * and navigation (previous/next). This is the primary user-facing playback interface.
+ *
+ * Design Patterns:
+ * - Composition with Headless Logic: useAudioPlayer hook provides audio state, useMediaPlayerController
+ *   handles contextual features (background audio, sleep timer). Component assembles sub-components.
+ * - Responsive Layout: Scales text sizes, artwork, and spacing based on screen width breakpoints.
+ *   Ensures readability on small phones and tablets without layout breaks.
+ * - Feature Toggles via Props: showFavorite, showSleepTimer, showReport, etc. allow parents to hide
+ *   features for different content types or user segments. Admin/QA testing simplified.
+ * - Performance Monitoring (dev): Tracks render time and logs when exceeds PERF_LOG_THRESHOLD_MS.
+ *   Helps identify performance regressions early.
+ *
+ * Key Dependencies:
+ * - useAudioPlayer: Playback state, seek, skip, playback rate control
+ * - useMediaPlayerController: Feature state (background audio, sleep timer, download)
+ * - Sub-components: Modular feature groups (header, content, transport, modals)
+ * - LinearGradient: Theme-aware background
+ *
+ * Consumed By:
+ * - Meditation play screens
+ * - Course/series playback screens
+ * - Sleep music player
+ */
+
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   View,
@@ -96,8 +126,17 @@ export interface MediaPlayerProps {
   onReport?: (category: ReportCategory, description?: string) => Promise<boolean>;
 }
 
+/**
+ * Performance monitoring for dev builds. Tracks render time and warns if a single
+ * render takes longer than this threshold (in milliseconds). Helps catch performance
+ * regressions early, especially important for animation-heavy screens.
+ */
 const PERF_LOG_THRESHOLD_MS = 8;
 
+/**
+ * High-resolution timer for performance measurements. Falls back to Date.now()
+ * if globalThis.performance is unavailable (rare edge cases).
+ */
 const getNow = () => {
   if (typeof globalThis !== 'undefined' && globalThis.performance?.now) {
     return globalThis.performance.now();
@@ -147,10 +186,22 @@ export function MediaPlayer({
   onRate,
   onReport,
 }: MediaPlayerProps) {
+  /**
+   * Performance monitoring refs (dev only). Tracks time from render start to commit.
+   * renderStartRef.current is updated on every render to capture the starting timestamp.
+   * hasMountedRef tracks whether this is the first mount or a subsequent update.
+   */
   const renderStartRef = useRef(0);
   const hasMountedRef = useRef(false);
   renderStartRef.current = getNow();
 
+  /**
+   * Dev-only performance check: Logs render duration if it exceeds PERF_LOG_THRESHOLD_MS.
+   * Runs after every render (no dependency array) to catch performance issues early.
+   * Differentiates between mount (first render) and update (subsequent renders).
+   *
+   * In production (__DEV__ === false), this effect is skipped entirely.
+   */
   useEffect(() => {
     if (!__DEV__) return;
 
@@ -165,11 +216,28 @@ export function MediaPlayer({
 
   const { theme, isDark } = useTheme();
   const { width: screenWidth } = useWindowDimensions();
-  
+
+  /**
+   * Responsive breakpoints for different phone sizes. Ensures the UI scales gracefully
+   * across small phones (iPhone SE ~375), standard phones (iPhone 12~390), and larger
+   * devices (iPhone 14 Pro Max ~428+).
+   *
+   * Breakpoints:
+   * - isSmallScreen (<375): SE and older iPhones
+   * - isMediumScreen (375-413): Standard size (iPhone 12, 13)
+   * - Large (>=414): Plus/Pro Max and larger Android devices
+   */
   // Responsive breakpoints
   const isSmallScreen = screenWidth < 375;
   const isMediumScreen = screenWidth >= 375 && screenWidth < 414;
-  
+
+  /**
+   * Responsive sizing values derived from screen width. These propagate to child
+   * components to maintain proper proportions and readability across devices.
+   *
+   * Example: On a small screen (375px), title uses 22px; on large (430px), uses 28px.
+   * This keeps the title readable without overflowing layout on small devices.
+   */
   // Responsive values
   const artworkSize = isSmallScreen ? 100 : isMediumScreen ? 120 : 140;
   const titleFontSize = isSmallScreen ? 22 : isMediumScreen ? 25 : 28;
@@ -216,9 +284,27 @@ export function MediaPlayer({
     skipRestore,
   });
 
+  /**
+   * Gradient selection logic:
+   * - If dark mode is enabled, use a neutral dark gradient instead of content-specific colors.
+   *   This provides consistent dark UX across all content types.
+   * - If light mode, use the content-specific gradient from props (e.g., purple for focus,
+   *   blue for stress reduction).
+   *
+   * This gives the player flexibility to adapt to system theme while maintaining brand identity.
+   */
   // Use dark gradient in dark mode
   const darkGradient: [string, string] = ['#1A1D29', '#2A2D3E'];
   const effectiveGradient = isDark ? darkGradient : gradientColors;
+
+  /**
+   * Download availability check: Only show download option if:
+   * - Device is online (not in offline mode)
+   * - Content ID and type are provided (required for tracking)
+   * - Audio URL is available (no point downloading without source)
+   *
+   * Parent components set these; they're not always present (e.g., live streams).
+   */
   const canDownload = !isOffline && !!contentId && !!contentType && !!audioUrl;
   const openSleepTimerPicker = useCallback(() => setShowSleepTimerPicker(true), [
     setShowSleepTimerPicker,

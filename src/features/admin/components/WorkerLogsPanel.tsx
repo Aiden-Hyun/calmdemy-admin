@@ -1,3 +1,24 @@
+/**
+ * Real-time worker log viewer with filtering and search.
+ *
+ * ARCHITECTURAL ROLE:
+ * Displays recent worker logs from any active stack. Provides level filtering
+ * (INFO/WARNING/ERROR), chronological ordering, and copy-to-clipboard export.
+ *
+ * DESIGN PATTERN:
+ * - Log aggregator: Streams latest log tail from selected worker stack
+ * - Filtering: Level-based filtering (severity >= selected) for noise reduction
+ * - Sorting: Ascending/descending chronological order toggle
+ * - Export: Copy logs to clipboard or share (platform-specific fallback)
+ *
+ * INTERACTION:
+ * 1. Select stack from horizontal chip scroll view
+ * 2. Filter by severity level (all, INFO, WARNING, ERROR)
+ * 3. Toggle sort order (newest/oldest first)
+ * 4. Copy filtered logs to clipboard
+ * 5. Quick feedback on copy action (hint toast)
+ */
+
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,

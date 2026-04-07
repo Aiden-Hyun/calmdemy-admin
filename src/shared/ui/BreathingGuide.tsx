@@ -1,3 +1,29 @@
+/**
+ * BreathingGuide.tsx
+ *
+ * Architectural Role:
+ * Shared UI component that provides visual and textual guidance for breathing exercises.
+ * Displays an animated circle that expands/contracts with the user's breath phases
+ * (inhale, hold, exhale, pause). Commonly used in meditation and anxiety-relief sessions.
+ *
+ * Design Patterns:
+ * - Animation Controller: Uses React Native Animated API with multiple parallel and sequential
+ *   animations. Phase detection drives animation playback (inhale → scale up, exhale → scale down).
+ * - Color Palette Per Phase: Each breathing phase (inhale, hold, exhale, pause) has a distinct
+ *   theme color for visual feedback. This helps users understand which phase they're in.
+ * - Controlled Component: Receives all state from parent and emits play/pause/stop callbacks.
+ *   Parent controls cycle counting and phase timing.
+ *
+ * Key Dependencies:
+ * - Animated API: For scale, opacity, and rotation transforms
+ * - ThemeContext: Phase-specific colors
+ * - Ionicons: Play/pause/stop control icons
+ *
+ * Consumed By:
+ * - Meditation/breathing exercise features
+ * - Standalone breathing practice screens
+ */
+
 import React, { useEffect, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Dimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -37,10 +63,27 @@ export function BreathingGuide({
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
   
+  /**
+   * Three animated values for the breathing circle:
+   * - scaleAnim: Main circle size (0.8 when relaxed, 1.2 when expanded)
+   * - opacityAnim: Circle brightness (more opaque during inhale for visual emphasis)
+   * - rotateAnim: Decorative outer circle rotation (subtle continuous spin)
+   *
+   * These are refs so they persist across renders and can be reused by multiple animations.
+   */
   const scaleAnim = useRef(new Animated.Value(0.8)).current;
   const opacityAnim = useRef(new Animated.Value(0.3)).current;
   const rotateAnim = useRef(new Animated.Value(0)).current;
 
+  /**
+   * Animate circle expansion/contraction based on breathing phase.
+   * - Inhale: Scale up to 1.2 and brighten (4s matches typical 4-count inhale)
+   * - Exhale: Scale down to 0.8 and dim (4s matches typical 4-count exhale)
+   * - Hold/Pause/Idle: No animation; relies on previous state
+   *
+   * Using Animated.parallel combines scale and opacity for smooth synchronized motion.
+   * useNativeDriver: true improves performance by running on the native thread.
+   */
   useEffect(() => {
     if (currentPhase === 'inhale') {
       Animated.parallel([
@@ -71,6 +114,13 @@ export function BreathingGuide({
     }
   }, [currentPhase, scaleAnim, opacityAnim]);
 
+  /**
+   * Outer decorative circle rotates continuously during active breathing.
+   * Stops and resets when paused or inactive. This subtle rotation adds visual
+   * interest and reinforces that the breathing exercise is in progress.
+   *
+   * 20s rotation cycle is intentionally slow to feel meditative, not distracting.
+   */
   useEffect(() => {
     if (isActive && !isPaused) {
       Animated.loop(
@@ -85,11 +135,25 @@ export function BreathingGuide({
     }
   }, [isActive, isPaused, rotateAnim]);
 
+  /**
+   * Convert animation value (0 to 1) into degrees (0 to 360).
+   * This is used to rotate the outer decorative circle.
+   */
   const rotation = rotateAnim.interpolate({
     inputRange: [0, 1],
     outputRange: ['0deg', '360deg'],
   });
 
+  /**
+   * Select circle color based on current breathing phase.
+   * Visual cues help users understand where they are in their breathing cycle
+   * when they can't read the text (small screens, glancing quickly).
+   *
+   * - Inhale: Secondary (energizing color)
+   * - Hold: Primary (main accent)
+   * - Exhale: Calm (soothing)
+   * - Pause: Sleep (restful)
+   */
   const getPhaseColor = () => {
     switch (currentPhase) {
       case 'inhale':

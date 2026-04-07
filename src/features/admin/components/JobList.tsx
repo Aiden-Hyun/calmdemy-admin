@@ -1,19 +1,29 @@
 /**
- * Job list view with hierarchical grouping and pagination.
+ * Job list view with hierarchical grouping and virtualization.
  *
  * ARCHITECTURAL ROLE:
  * Master view in Master-Detail pattern. Renders FlatList of JobCard components
- * with smart parent-child grouping for full_subject jobs.
+ * with intelligent parent-child grouping for full_subject jobs and their courses.
+ * Handles loading, empty states, and draft previews.
  *
  * DESIGN PATTERNS:
- * - FlatList virtualization: Efficient rendering of large job lists
- * - Hierarchical grouping: Full subject jobs expanded to show child courses
- * - Loading/empty states: ActivityIndicator for loading, onboarding for empty
+ * - FlatList virtualization: Efficient rendering of large job lists (recycles cards)
+ * - Hierarchical grouping: Full subject jobs expanded to show child courses inline
+ * - Loading/empty states: ActivityIndicator, onboarding message, draft section
+ * - Job grouping: buildJobGroups() nests courses under parent subject jobs
  *
  * GROUPING LOGIC:
- * buildJobGroups() nests course jobs under their parent full_subject job.
- * This creates visual hierarchy while maintaining single-list flat structure.
- * Child jobs indented with left border for visual distinction.
+ * 1. Index all jobs by ID for O(1) parent lookup
+ * 2. Filter out courses that belong to a full_subject parent
+ * 3. Create JobGroup with empty children array initially
+ * 4. Final pass: populate children arrays from index
+ * Result: Flat FlatList data still groups parent + children visually via left border
+ *
+ * VISUAL HIERARCHY:
+ * Parent full_subject job (full width card)
+ *   - Child course 1 (indented 40pt, left border)
+ *   - Child course 2 (indented 40pt, left border)
+ * Standalone course/meditation (full width card)
  */
 
 import React, { useMemo } from 'react';

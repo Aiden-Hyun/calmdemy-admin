@@ -1,14 +1,66 @@
 /**
- * Seed content for Firestore
+ * @fileoverview Seed content data for initializing Firestore with meditation and wellness content.
  *
- * This file contains all the sample content that will be uploaded to Firestore.
- * Audio files reference local assets via the audio_file key.
+ * ARCHITECTURAL ROLE:
+ * Central data source for initial content population. Defines all default meditations,
+ * breathing exercises, sleep stories, series, programs, and courses.
+ *
+ * DESIGN PATTERN:
+ * - Seed Data: Declarative content manifest (loaded once on app init)
+ * - Repository Separation: Seed data separate from repository code
+ * - Testability: Easy to mock or swap entire content set
+ * - Localization: Structured for future i18n extraction
+ *
+ * DATA STRUCTURE:
+ * - Each content type has SeedX interface defining expected fields
+ * - Arrays organized by category (gratitude, stress, focus, etc.)
+ * - Audio files reference keys from audioFiles.ts (not URLs)
+ * - Images reference keys from imageFiles.ts (not URLs)
+ * - All content marked isFree during initial seed (can change in Firestore)
+ *
+ * INITIALIZATION FLOW:
+ * 1. On app startup (or admin dashboard): Import seedContent
+ * 2. Map each seed item to Firestore document schema
+ * 3. Batch upload to Firestore (seedContent is not synced)
+ * 4. Content is now editable in Firestore (seed data is initial state only)
+ *
+ * USAGE NOTES:
+ * - This is reference data, NOT live data
+ * - Firestore is single source of truth after initialization
+ * - Changes here require re-running seed/initialization script
+ * - Consider version management if seed data is frequently updated
+ *
+ * CONTENT ORGANIZATION:
+ * - Guided Meditations: By psychological theme (40 entries)
+ * - Breathing Exercises: By technique and use case
+ * - Sleep Stories: By tone and narrative theme
+ * - Series: Multi-chapter bedtime story collections
+ * - Programs: Structured multi-session learning paths
+ * - Courses: Premium content modules with sessions
+ * - Subjects: Course category taxonomy
  */
 
 import { MeditationCategory } from "../types";
 
 // ==================== GUIDED MEDITATIONS (40 entries) ====================
 
+/**
+ * Seed meditation content shape.
+ *
+ * FIELDS MAPPED TO FIRESTORE:
+ * - category: Psychological theme (determines browsing/filtering)
+ * - difficulty_level: Beginner, intermediate, or advanced progression
+ * - audio_file: Key reference to audioFiles.ts (not direct URL)
+ * - image: Key reference to imageFiles.ts (not direct URL)
+ * - instructor: Narrator/creator name for attribution
+ * - tags: Array of searchable keywords (future search index)
+ * - isFree: Product flag (determines paywall eligibility)
+ *
+ * DESIGN NOTES:
+ * - No ID field (Firestore generates auto-IDs)
+ * - No timestamps (Firestore auto-adds created_at, updated_at)
+ * - Audio/image keys allow flexible asset swapping without content updates
+ */
 export interface SeedMeditation {
   title: string;
   description: string;
@@ -16,10 +68,10 @@ export interface SeedMeditation {
   duration_minutes: number;
   difficulty_level: "beginner" | "intermediate" | "advanced";
   instructor: string;
-  audio_file: string;
-  image: string;
-  isFree: boolean;
-  tags: string[];
+  audio_file: string; // Key reference to audioFiles.ts, not direct URL
+  image: string; // Key reference to imageFiles.ts, not direct URL
+  isFree: boolean; // Product flag: true = free content, false = premium
+  tags: string[]; // Searchable keywords for content discovery
 }
 
 export const seedMeditations: SeedMeditation[] = [

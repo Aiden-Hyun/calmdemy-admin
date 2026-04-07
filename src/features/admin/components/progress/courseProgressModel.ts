@@ -1,3 +1,25 @@
+/**
+ * Course progress model: synthesizes V2 factory timeline into stages and shards.
+ *
+ * ARCHITECTURAL ROLE:
+ * Transforms raw factory step timeline into hierarchical progress structure:
+ * Course stages (7 pipeline steps) -> Audio shards (9 sessions INT/M1-4L/P).
+ * Provides state aggregation, worker tracking, and error reporting.
+ *
+ * DESIGN PATTERN:
+ * - Pipeline model: Stages are sequential (plan -> scripts -> audio -> upload -> publish)
+ * - Sharding model: Audio generation runs per-session; synthesis is parallelizable
+ * - Attempt tracking: Records which attempt, worker, and error for each step
+ * - State reduction: Aggregates multiple entries into highest-level state
+ *
+ * KEY CONCEPTS:
+ * - ProgressState: Lifecycle states (waiting, queued, running, retrying, succeeded, failed, cancelled)
+ * - CourseStageStep: 7 canonical stages in course generation pipeline
+ * - CourseShardKey: 9 audio sessions (INT, M1L, M1P, M2L, M2P, M3L, M3P, M4L, M4P)
+ * - WorkerLane: Timeline of steps executed by a single worker
+ * - CourseProgressModel: Complete hierarchical view of job execution
+ */
+
 import { ContentJob, JobStepTimelineEntry } from '../../types';
 
 export type ProgressState =

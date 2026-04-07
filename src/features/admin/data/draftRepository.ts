@@ -1,19 +1,27 @@
 /**
- * Local draft persistence layer (AsyncStorage).
+ * Local draft persistence layer using AsyncStorage.
  *
  * ARCHITECTURAL ROLE:
  * Manages offline-first draft state for job creation forms.
  * Users can create/edit forms, save drafts locally, then launch jobs when ready.
+ * Single source of truth: AsyncStorage key "content_factory_drafts".
  *
  * DESIGN PATTERNS:
  * - Repository pattern: Abstracts AsyncStorage behind domain-friendly functions
- * - ACID guarantees: Full drafts list is replaced atomically (no partial saves)
- * - Time-ordered: Drafts sorted by updatedAt for LRU-like UX
+ * - Atomic writes: Full drafts list replaced atomically (no partial saves)
+ * - Time-ordered: Drafts sorted by updatedAt (newest first) for LRU UX
+ * - Defensive reads: Invalid/corrupt data returns empty array (graceful degradation)
  *
  * KEY NOTES:
- * - No sync to Firestore; drafts are local-only working copies
+ * - No sync to Firestore: Drafts are local-only working copies
  * - Draft ID generation: timestamp + random suffix prevents collisions
- * - Error handling: Returns empty array or null on read errors (graceful degradation)
+ * - Error handling: Read errors logged + return safe empty state
+ * - Immutability: Each save creates new draft object, filtering out old version
+ *
+ * FLOW:
+ * 1. getDrafts() -> read all, sort by recency, return to component
+ * 2. saveDraft() -> read all, filter out old version, insert at head, write atomically
+ * 3. deleteDraft() -> read all, filter out by ID, write atomically
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';

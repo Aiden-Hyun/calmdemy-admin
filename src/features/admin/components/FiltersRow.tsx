@@ -1,11 +1,26 @@
 /**
- * Job list filter bar with predefined status options.
+ * Job list filter chip bar with status options.
+ *
+ * ARCHITECTURAL ROLE:
+ * Quick filter navigation for job list. Shows predefined status filters
+ * (All, Pending, Active, Completed, etc.) as horizontal chip buttons.
  *
  * DESIGN PATTERN:
- * - Filter bank: Horizontal chip buttons for common status filters
- * - Single selection: Only one filter active at a time
+ * - Filter bank: Horizontal scrollable row of single-selection chips
+ * - Mutually exclusive: Only one filter active at a time
+ * - Visual feedback: Active chip highlighted (primary color background)
+ * - Default: "All" shows all jobs (filter = undefined)
  *
- * USAGE:
+ * FILTERS:
+ * - All (undefined): Show all jobs
+ * - Pending: Jobs not yet started
+ * - TTS Pending: Waiting for audio conversion
+ * - Active: Currently processing (llm_generating)
+ * - Paused: User-paused or blocked
+ * - Completed: Finished (may need publishing)
+ * - Failed: Terminal error state
+ *
+ * USAGE EXAMPLE:
  * ```tsx
  * const [filter, setFilter] = useState<JobStatus | undefined>();
  * <FiltersRow selectedFilter={filter} onFilterChange={setFilter} />

@@ -1,3 +1,32 @@
+/**
+ * MeditationCard.tsx
+ *
+ * Architectural Role:
+ * Visually rich card component for individual meditation items displayed in lists or grids.
+ * Shows meditation metadata (title, instructor, duration) overlaid on a gradient background
+ * derived from the meditation's primary theme. Includes optional favorite heart button.
+ * Commonly used in meditation discovery, recommended collections, and search results.
+ *
+ * Design Patterns:
+ * - Theme-Based Gradient: Colors chosen dynamically from a fixed set based on meditation.themes[0].
+ *   This creates visual organization by topic (focus meditations = purple, stress = blue, etc.).
+ * - Composed Imagery: Supports thumbnail URLs with automatic fallback to a leaf icon if missing.
+ *   Graceful degradation ensures cards remain visually appealing with or without artwork.
+ * - Favorite Toggle: Optional callback allows users to heart meditations. State passed via prop,
+ *   enabling parent to control persistence and track favorited items.
+ *
+ * Key Dependencies:
+ * - LinearGradient: Category-specific background colors
+ * - ThemeContext: Typography and spacing
+ * - GuidedMeditation type: Structure expected from Firestore or API
+ *
+ * Consumed By:
+ * - Meditation discovery/category pages
+ * - Recommended meditations carousel
+ * - Search results
+ * - Favorite/saved meditations list
+ */
+
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -21,8 +50,28 @@ export function MeditationCard({
 }: MeditationCardProps) {
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
+
+  /**
+   * Primary theme determines the card's background gradient color.
+   * Extracted from meditation.themes array (first item is primary).
+   * If no theme is specified, falls back to focus (purple).
+   *
+   * This creates visual categorization: users learn to recognize focus meditations
+   * by their purple cards, stress-relief by blue, etc. without reading the title.
+   */
   const primaryTheme = meditation.themes?.[0];
 
+  /**
+   * Map meditation theme to a gradient color pair (top to bottom).
+   * Each theme has a specific psychology-aligned color scheme:
+   * - Focus: Purple (concentration, calm intelligence)
+   * - Stress: Light Blue (peace, relaxation)
+   * - Anxiety: Bright Blue (trust, calm)
+   * - Sleep: Deep Purple (rest, introspection)
+   * - Gratitude: Pink-Yellow (warmth, positivity)
+   *
+   * Gradients create visual depth and improve card distinctiveness in a grid.
+   */
   const getCategoryGradient = (): [string, string] => {
     switch (primaryTheme) {
       case 'focus':

@@ -89,14 +89,18 @@ export async function savePlaybackProgress(
   positionSeconds: number,
   durationSeconds: number
 ): Promise<void> {
-  // Filter 1: Don't save trivial progress (< 5 seconds into content)
+  // FILTER 1: Don't save trivial progress (< 5 seconds into content)
+  // Optimization: avoid cluttering database with users who briefly skipped content
   if (positionSeconds < 5) return;
-  // Filter 2: Don't save near-completion (>= 95% done)
-  // User will likely finish next play anyway, avoid resume prompt
+
+  // FILTER 2: Don't save near-completion (>= 95% done)
+  // Optimization: user will likely finish next play anyway, avoid unnecessary resume prompt
+  // Skip the math if duration is 0 (unknown length)
   if (durationSeconds > 0 && positionSeconds / durationSeconds >= 0.95) return;
 
   try {
     // Composite key ensures one record per user+content pair
+    // setDoc() without merge overwrites the entire doc (idempotent, safe for throttled saves)
     const docId = `${userId}_${contentId}`;
     await setDoc(doc(playbackProgressCollection, docId), {
       user_id: userId,
@@ -104,10 +108,12 @@ export async function savePlaybackProgress(
       content_type: contentType,
       position_seconds: positionSeconds,
       duration_seconds: durationSeconds,
-      updated_at: serverTimestamp(),
+      updated_at: serverTimestamp(), // Server time for consistent sorting
     });
   } catch (error) {
     console.error("Error saving playback progress:", error);
+    // Silently ignore errors: temporary Firestore unavailability shouldn't stop playback
+    // User just won't have resume position saved; not a critical failure
   }
 }
 
@@ -136,13 +142,18 @@ export async function getPlaybackProgress(
   contentId: string
 ): Promise<PlaybackProgress | null> {
   try {
-    // Direct document lookup using composite key
+    // Direct document lookup using composite key (fast, single doc fetch)
+    // Much faster than querying: getDoc (O(1)) vs getDocs (O(n))
     const docId = `${userId}_${contentId}`;
     const docSnap = await getDoc(doc(playbackProgressCollection, docId));
+
+    // Return null if no progress saved for this user+content pair
     if (!docSnap.exists()) return null;
+
     return docSnap.data() as PlaybackProgress;
   } catch (error) {
     console.error("Error getting playback progress:", error);
+    // Return null on error: assume no progress saved, allow playback from start
     return null;
   }
 }
@@ -169,9 +180,12 @@ export async function clearPlaybackProgress(
 ): Promise<void> {
   try {
     // Direct document deletion using composite key
+    // Idempotent: deleting a non-existent document succeeds silently
     const docId = `${userId}_${contentId}`;
     await deleteDoc(doc(playbackProgressCollection, docId));
   } catch (error) {
     console.error("Error clearing playback progress:", error);
+    // Silently ignore errors: clearing progress is best-effort
+    // Worst case: user sees resume prompt even though they finished
   }
 }

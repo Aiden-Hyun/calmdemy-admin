@@ -1,6 +1,36 @@
+/**
+ * Media Player Styles
+ *
+ * Architectural Role:
+ * Centralized style definitions for the media player component family
+ * (header, content info, transport actions). Encapsulates all theme-dependent
+ * styling for reusability across media player sub-components.
+ *
+ * Design Patterns:
+ * - Style Factory: createMediaPlayerStyles(theme) generates theme-aware styles
+ * - Composition: Sub-components receive pre-computed styles as props
+ * - Dark Theme: Dark background (#333 area) with light text for video/playback UI
+ *
+ * Key Features:
+ * - Centralized colors and spacing
+ * - Responsive sizing (scaled based on content dimensions)
+ * - Consistent button/badge styling
+ * - State-specific styles (active, disabled, downloading)
+ *
+ * Used By:
+ * - MediaPlayerHeader, MediaPlayerContentInfo, MediaPlayerTransportActions
+ * - All use createMediaPlayerStyles(theme) to get styles
+ */
+
 import { StyleSheet } from "react-native";
 import { Theme } from "@/theme";
 
+/**
+ * createMediaPlayerStyles - Theme-aware style factory
+ *
+ * Returns all style definitions for the media player component tree.
+ * Called with theme to enable light/dark mode support and color customization.
+ */
 export const createMediaPlayerStyles = (theme: Theme) =>
   StyleSheet.create({
     fullScreen: {
@@ -325,4 +355,11 @@ export const createMediaPlayerStyles = (theme: Theme) =>
     },
   });
 
+/**
+ * MediaPlayerStyles Type:
+ * TypeScript type for the style object returned by createMediaPlayerStyles.
+ * Used in component prop interfaces to ensure type-safe style passing.
+ *
+ * Usage: styles: MediaPlayerStyles
+ */
 export type MediaPlayerStyles = ReturnType<typeof createMediaPlayerStyles>;

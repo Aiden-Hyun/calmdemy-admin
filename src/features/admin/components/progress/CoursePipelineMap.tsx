@@ -1,3 +1,26 @@
+/**
+ * Course generation pipeline visualization showing stage progress and audio shards.
+ *
+ * ARCHITECTURAL ROLE:
+ * Renders hierarchical course pipeline: 7 stages (generate plan, scripts, audio, etc.)
+ * with nested progress rows for each audio shard (session). Shows all attempts, workers,
+ * errors, and timing data from V2 factory step timeline.
+ *
+ * DESIGN PATTERN:
+ * - Progress hierarchy: Stages -> Shards -> Attempts
+ * - Visual state coding: Color-coded icons + text (waiting, queued, running, etc.)
+ * - Summary chips: Quick stats for audio progress (8/9 sessions complete)
+ * - Error display: Truncated error messages with error codes
+ *
+ * DISPLAYS:
+ * 1. Run ID badge (if available from factory execution)
+ * 2. Stage summary: Total entries per stage, latest status
+ * 3. Audio summary chips: Count of sessions by state (succeeded/failed/running)
+ * 4. Stage rows: Progress for each COURSE_STAGE_STEPS with metadata
+ * 5. Shard rows: Progress for each audio session (INT, M1L, M1P, etc.)
+ * 6. Upload blocker info: Why upload might be stuck (if applicable)
+ */
+
 import React, { useMemo } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, Text, View } from 'react-native';

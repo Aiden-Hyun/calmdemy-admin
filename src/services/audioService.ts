@@ -33,6 +33,10 @@ import { setAudioModeAsync, setIsAudioActiveAsync } from 'expo-audio';
  * Snapshot of audio player state.
  * Typically tracked in a hook or Redux store, not directly used by this service.
  * Provided here for reference by components integrating with useAudioPlayer.
+ *
+ * USAGE: This interface is exported for type safety in components that manage
+ * their own audio state. The actual state is managed by the useAudioPlayer hook,
+ * which handles playback, not this service (which only configures device audio).
  */
 export interface AudioState {
   isPlaying: boolean;

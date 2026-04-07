@@ -1,3 +1,45 @@
+/**
+ * @file LoginScreen.tsx (Native)
+ *
+ * Architectural Role:
+ *   Authentication screen for login, sign-up, and account linking.
+ *   Handles email/password, Google, and Apple authentication.
+ *   Supports two modes: normal auth and account linking (upgrade anonymous to named).
+ *   Part of the MVVM View layer for the auth feature.
+ *
+ * Design Patterns:
+ *   - Strategy: Platform-specific variant (native with rich animations; see LoginScreen.web.tsx)
+ *   - Modal Coordination: Shows collision modal when credential exists, then switch-confirm modal
+ *   - Link Mode (Account Linking): Special UI/flow when user taps "Link Account" from Settings
+ *   - Animated Views: Sequential entrance animations for visual polish
+ *   - Deferred Navigation: Uses navigation.goBack() or fallback to /home
+ *
+ * Key Dependencies:
+ *   - AuthContext: useAuth() for sign-in/up methods and collision error handling
+ *   - ThemeContext: useTheme() for colors and styling
+ *   - expo-router: useRouter(), useLocalSearchParams() for mode detection and navigation
+ *   - Shared UI: AnimatedPressable, AnimatedView, modal components
+ *   - expo-linear-gradient: Hero section gradient
+ *
+ * Two Modes:
+ *   1. Normal: Login, Sign-up, or guest skip (become anonymous)
+ *   2. Link Mode (mode=link): Upgrade anonymous account to email/social (preserves subscription)
+ *
+ * Auth Methods:
+ *   - Email/Password: signUp() or signIn()
+ *   - Google: signInWithGoogle() or upgradeAnonymousWithGoogle()
+ *   - Apple: signInWithApple() or upgradeAnonymousWithApple()
+ *
+ * Collision Handling:
+ *   When social credential matches existing email account, show user a choice:
+ *   - "Link to that account" (sign in to matched account instead)
+ *   - "Use different method" (try another auth method)
+ *
+ * Consumed By:
+ *   - expo-router on /login route
+ *   - Settings screen when user taps "Link Account" (passes mode=link)
+ */
+
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import {
   View,
@@ -25,14 +67,18 @@ import { Theme } from "@/theme";
 
 export default function LoginScreen() {
   const { mode } = useLocalSearchParams<{ mode?: string }>();
-  const isLinkMode = mode === 'link'; // true when user tapped "Link Account" from Settings
+  // Link mode: user came from Settings "Link Account"; preserve subscription by upgrading anonymous account
+  const isLinkMode = mode === 'link';
   const navigation = useNavigation();
   
+  // Form state
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isSignUp, setIsSignUp] = useState(false);
   const [emailFocused, setEmailFocused] = useState(false);
   const [passwordFocused, setPasswordFocused] = useState(false);
+
+  // Auth context methods and state
   const {
     user,
     isAnonymous,
@@ -48,14 +94,21 @@ export default function LoginScreen() {
     isAppleSignInAvailable,
     loading,
   } = useAuth();
+
+  // Loading and error states per auth method
   const [googleLoading, setGoogleLoading] = useState(false);
   const [appleLoading, setAppleLoading] = useState(false);
+  // Collision error from social sign-in (credential exists for different account)
   const [collisionError, setCollisionError] = useState<CredentialCollisionError | null>(null);
+  // Show account switch confirmation (second modal in collision flow)
   const [showSwitchConfirm, setShowSwitchConfirm] = useState(false);
+
   const { theme, isDark } = useTheme();
 
+  // Memoize styles to prevent recreation on every render
   const styles = useMemo(() => createStyles(theme, isDark), [theme, isDark]);
 
+  // Google logo SVG for button. Using inline SVG avoids import complications.
   const GOOGLE_SVG_XML = `
     <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
     <rect width="40" height="40" rx="20" fill="#F2F2F2"/>
@@ -73,9 +126,13 @@ export default function LoginScreen() {
     </svg>
   `;
 
-  // Button loading animation
+  // Animated button scale for loading state visual feedback
   const buttonScale = useRef(new Animated.Value(1)).current;
 
+  /**
+   * Animate button scale during auth operation.
+   * Creates a pulsing effect while loading to give visual feedback.
+   */
   useEffect(() => {
     if (loading) {
       Animated.loop(
@@ -97,6 +154,11 @@ export default function LoginScreen() {
     }
   }, [loading, buttonScale]);
 
+  /**
+   * Handle email/password authentication.
+   * Routes: link mode (upgradeAnonymousWithEmail), sign-up, or sign-in.
+   * On collision error, store error state for modal flow.
+   */
   const handleAuth = async () => {
     if (!email || !password) {
       Alert.alert("Error", "Please fill in all fields");
@@ -104,15 +166,15 @@ export default function LoginScreen() {
     }
 
     try {
-      // Link mode: link email/password to anonymous account
+      // Link mode: upgrade anonymous account with email/password
       if (isLinkMode && isAnonymous) {
         await upgradeAnonymousWithEmail(email, password);
         Alert.alert("Success", "Email linked to your account!");
         router.replace('/(tabs)/home');
         return;
       }
-      
-      // Normal sign up/sign in
+
+      // Normal authentication: sign up or sign in
       if (isSignUp) {
         await signUp(email, password);
         Alert.alert(
@@ -125,7 +187,7 @@ export default function LoginScreen() {
         router.replace('/(tabs)/home');
       }
     } catch (error: any) {
-      // Handle collision in link mode
+      // Collision: credential exists for a different account
       if (error instanceof CredentialCollisionError) {
         setCollisionError(error);
       } else {
@@ -134,82 +196,76 @@ export default function LoginScreen() {
     }
   };
 
+  /**
+   * Handle Google sign-in / link to anonymous account.
+   * Routes based on link mode:
+   * - Link mode: upgrade anonymous account with Google credential
+   * - Normal: sign in with Google (replaces anonymous if present)
+   * Handles collision errors (credential exists for different account).
+   */
   const handleGoogleSignIn = async () => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/abd8d170-6f53-45be-bd37-3634e6180c4d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'login.tsx:handleGoogleSignIn:entry',message:'Google sign-in button pressed',data:{isAnonymous,isLinkMode,hasUser:!!user},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'FIX'})}).catch(()=>{});
-    // #endregion
     try {
       setGoogleLoading(true);
-      
-      // Only use upgrade (link) when user explicitly tapped "Link Account" (mode=link)
-      // Otherwise, use regular sign-in which replaces the anonymous user
+
+      // Link mode: upgrade anonymous account with Google credential
+      // Normal mode: replace anonymous with Google-authenticated account
       if (isLinkMode && isAnonymous) {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/abd8d170-6f53-45be-bd37-3634e6180c4d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'login.tsx:handleGoogleSignIn:upgrading',message:'Link mode - using upgradeAnonymousWithGoogle',data:{userId:user?.uid},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'FIX'})}).catch(()=>{});
-        // #endregion
         await upgradeAnonymousWithGoogle();
         router.replace('/(tabs)/home');
       } else {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/abd8d170-6f53-45be-bd37-3634e6180c4d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'login.tsx:handleGoogleSignIn:signIn',message:'Sign-in mode - using signInWithGoogle',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'FIX'})}).catch(()=>{});
-        // #endregion
         await signInWithGoogle();
         router.replace('/(tabs)/home');
       }
     } catch (error: any) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/abd8d170-6f53-45be-bd37-3634e6180c4d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'login.tsx:handleGoogleSignIn:catch',message:'Caught error',data:{errorType:error?.constructor?.name,isCollisionError:error instanceof CredentialCollisionError,errorMessage:error?.message},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'FIX'})}).catch(()=>{});
-      // #endregion
+      // Collision: credential exists for a different account
       if (error instanceof CredentialCollisionError) {
         setCollisionError(error);
       } else if (error.message && error.message !== "User cancelled") {
         Alert.alert("Error", error.message);
       }
-      // User cancelled - do nothing, stay on current page
+      // User cancelled dialog: stay on current page, no error
     } finally {
       setGoogleLoading(false);
     }
   };
 
+  /**
+   * Handle Apple sign-in / link to anonymous account.
+   * Same flow as Google: check link mode, route to upgrade or regular sign-in.
+   * iOS only (gated by isAppleSignInAvailable).
+   */
   const handleAppleSignIn = async () => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/abd8d170-6f53-45be-bd37-3634e6180c4d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'login.tsx:handleAppleSignIn:entry',message:'Apple sign-in button pressed',data:{isAnonymous,isLinkMode,hasUser:!!user},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'FIX'})}).catch(()=>{});
-    // #endregion
     try {
       setAppleLoading(true);
-      
-      // Only use upgrade (link) when user explicitly tapped "Link Account" (mode=link)
-      // Otherwise, use regular sign-in which replaces the anonymous user
+
+      // Link mode: upgrade anonymous account with Apple credential
+      // Normal mode: replace anonymous with Apple-authenticated account
       if (isLinkMode && isAnonymous) {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/abd8d170-6f53-45be-bd37-3634e6180c4d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'login.tsx:handleAppleSignIn:upgrading',message:'Link mode - using upgradeAnonymousWithApple',data:{userId:user?.uid},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'FIX'})}).catch(()=>{});
-        // #endregion
         await upgradeAnonymousWithApple();
         router.replace('/(tabs)/home');
       } else {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/abd8d170-6f53-45be-bd37-3634e6180c4d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'login.tsx:handleAppleSignIn:signIn',message:'Sign-in mode - using signInWithApple',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'FIX'})}).catch(()=>{});
-        // #endregion
         await signInWithApple();
         router.replace('/(tabs)/home');
       }
     } catch (error: any) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/abd8d170-6f53-45be-bd37-3634e6180c4d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'login.tsx:handleAppleSignIn:catch',message:'Caught error',data:{errorType:error?.constructor?.name,isCollisionError:error instanceof CredentialCollisionError,errorMessage:error?.message},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'FIX'})}).catch(()=>{});
-      // #endregion
+      // Collision: credential exists for a different account
       if (error instanceof CredentialCollisionError) {
         setCollisionError(error);
       } else if (error.message && error.message !== "User cancelled") {
         Alert.alert("Error", error.message);
       }
-      // User cancelled - do nothing, stay on current page
+      // User cancelled dialog: stay on current page, no error
     } finally {
       setAppleLoading(false);
     }
   };
 
+  /**
+   * Skip login: create anonymous session if needed, then navigate back or home.
+   * Allows users to explore app without committing to an account.
+   */
   const handleSkipLogin = async () => {
-    // If not signed in, create an anonymous session first
+    // Create anonymous session if not signed in
     if (!user) {
       try {
         await signInAnonymously();
@@ -219,7 +275,7 @@ export default function LoginScreen() {
       }
     }
 
-    // Prefer going back when history exists; otherwise fall back to home
+    // Navigate: prefer going back if history exists, otherwise go to home
     const canGoBack = typeof (navigation as any)?.canGoBack === "function"
       ? (navigation as any).canGoBack()
       : false;
@@ -231,12 +287,18 @@ export default function LoginScreen() {
     }
   };
 
-  // Collision modal handler - show switch confirmation modal
+  /**
+   * Collision modal handler: transition from collision modal to account switch confirmation.
+   * User chose to "link to that account"; show final confirmation before switching.
+   */
   const handleCollisionSignIn = () => {
     setShowSwitchConfirm(true);
   };
 
-  // Handle confirmed account switch - auto sign in with pending credential
+  /**
+   * Execute account switch: sign in with the pending credential that caused collision.
+   * This replaces the current account session with the matched account.
+   */
   const handleConfirmSwitch = async () => {
     if (!collisionError?.pendingCredential) return;
     try {
@@ -249,15 +311,19 @@ export default function LoginScreen() {
     }
   };
 
-  // Cancel switch - go back to collision modal
+  /**
+   * Cancel account switch: go back to collision modal instead of confirming.
+   * Allows user to pick "Use different method" option.
+   */
   const handleCancelSwitch = () => {
     setShowSwitchConfirm(false);
   };
 
-  // Link mode uses a blue/purple accent to visually distinguish from regular login
+  // Link mode styling: indigo accent to distinguish from regular login
   const linkAccentColor = '#6366F1'; // Indigo
   const linkAccentLight = '#E0E7FF'; // Indigo light
   
+  // Hero gradient varies by link mode and theme
   const heroGradient = isDark
     ? ([theme.colors.gray[100], theme.colors.background] as [string, string])
     : isLinkMode
@@ -277,7 +343,7 @@ export default function LoginScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {/* Hero Section */}
+        {/* Hero Section: Logo, title, subtitle with sequential animations */}
         <LinearGradient
           colors={heroGradient}
           style={styles.hero}
@@ -309,7 +375,7 @@ export default function LoginScreen() {
           </AnimatedView>
         </LinearGradient>
 
-        {/* Form Section */}
+        {/* Form Section: Email, password, and social buttons */}
         <View style={styles.formContainer}>
           <AnimatedView delay={300} duration={500}>
             <View style={styles.formHeader}>
@@ -354,7 +420,7 @@ export default function LoginScreen() {
             </AnimatedPressable>
           </AnimatedView>
 
-          {/* Apple Sign In Button - iOS only */}
+          {/* Apple Sign In Button - iOS only (gated by availability check) */}
           {isAppleSignInAvailable && (
             <AnimatedView delay={500} duration={500}>
               <AnimatedPressable
@@ -494,7 +560,7 @@ export default function LoginScreen() {
             </AnimatedPressable>
           </AnimatedView>
 
-          {/* Toggle between Sign Up / Sign In - hide in link mode */}
+          {/* Toggle Sign Up / Sign In - hidden in link mode */}
           {!isLinkMode && (
             <AnimatedView delay={1000} duration={500}>
               <AnimatedPressable
@@ -512,8 +578,8 @@ export default function LoginScreen() {
               </AnimatedPressable>
             </AnimatedView>
           )}
-          
-          {/* Link mode helper text */}
+
+          {/* Link mode helper: explain account linking behavior */}
           {isLinkMode && (
             <AnimatedView delay={1000} duration={500}>
               <Text style={styles.linkHelperText}>
@@ -524,7 +590,7 @@ export default function LoginScreen() {
         </View>
       </ScrollView>
 
-      {/* Skip/Close Button - rendered AFTER ScrollView to ensure it's on top */}
+      {/* Skip/Close Button: positioned absolute, rendered after ScrollView to ensure top z-index */}
       <View style={styles.skipButton}>
         <AnimatedPressable
           onPress={handleSkipLogin}
@@ -534,7 +600,7 @@ export default function LoginScreen() {
         </AnimatedPressable>
       </View>
       
-      {/* Credential collision modal */}
+      {/* Credential Collision Modal: shows when social credential matches different account */}
       {collisionError && !showSwitchConfirm && (
         <CredentialCollisionModal
           visible={!!collisionError && !showSwitchConfirm}
@@ -547,7 +613,7 @@ export default function LoginScreen() {
         />
       )}
 
-      {/* Account switch confirmation modal */}
+      {/* Account Switch Confirmation Modal: final check before switching accounts */}
       {collisionError && showSwitchConfirm && (
         <AccountSwitchConfirmModal
           visible={showSwitchConfirm}

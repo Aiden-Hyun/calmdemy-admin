@@ -1,3 +1,21 @@
+/**
+ * ARCHITECTURAL ROLE:
+ * Content item result card for catalog listing. Displays summary info (title, type, duration),
+ * optional regeneration status/action, and visual indicators (access level, thumbnail quality badges).
+ *
+ * DESIGN PATTERNS:
+ * - **Presentational Component**: Pure component, no local state or hooks (except useMemo for styles)
+ *   All behavior driven by props callbacks (onPress, onRegenerate)
+ * - **Conditional Rendering**: Shows different UI based on showRegenerate flag and regenerationStatus
+ *   Supports multiple modes: view-only, regeneration pending, regeneration complete, thumbnail QA
+ * - **Visual Status Indicators**: Collection-specific icons, access badges (free/premium),
+ *   thumbnail quality badges (missing/web), regeneration status pills with spinner
+ *
+ * CONSUMERS:
+ * - ContentManagerScreen FlatList rendering catalog items
+ * - Can switch to regeneration mode to show status during factory jobs
+ */
+
 import React, { useMemo } from 'react';
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -6,6 +24,10 @@ import { Theme } from '@/theme';
 import { JobStatus } from '@features/admin/types';
 import { ContentManagerItemSummary, isWebStockThumbnail } from '../types';
 
+/**
+ * Wraps factory job status and regeneration progress info for display in the card.
+ * Used by ContentManagerScreen to show inline regeneration feedback (spinner, success, error states).
+ */
 export interface RegenerationStatusInfo {
   jobId?: string;
   status: JobStatus | 'no_job' | 'error' | 'unsupported';
@@ -22,11 +44,20 @@ interface Props {
   onRegenerate?: () => void;
 }
 
+/**
+ * Formats duration in minutes to UI-friendly string (e.g., "23 min").
+ * Returns null if missing or invalid, used to conditionally render duration badge.
+ */
 function formatDuration(durationMinutes?: number): string | null {
   if (!durationMinutes || durationMinutes <= 0) return null;
   return `${durationMinutes} min`;
 }
 
+/**
+ * Maps content collection type to Ionicon name for visual type identification.
+ * Each content type gets its own icon (leaf for meditations, book for stories, etc.)
+ * providing visual scannability in long lists.
+ */
 function iconForCollection(collection: ContentManagerItemSummary['collection']) {
   switch (collection) {
     case 'guided_meditations':
@@ -64,6 +95,10 @@ function iconForCollection(collection: ContentManagerItemSummary['collection']) 
   }
 }
 
+/**
+ * Maps factory job status to appropriate Ionicon name for status pill.
+ * Visual feedback: pending→clock, generating→sparkles, done→checkmark, error→alert.
+ */
 function statusIcon(status: RegenerationStatusInfo['status']): keyof typeof Ionicons.glyphMap {
   switch (status) {
     case 'pending':
@@ -84,14 +119,36 @@ function statusIcon(status: RegenerationStatusInfo['status']): keyof typeof Ioni
   }
 }
 
+/**
+ * Predicate: status is an error state (job failed, no job found, content type unsupported for regen).
+ * Used to style status pill with error colors (red).
+ */
 function isErrorStatus(status: RegenerationStatusInfo['status']): boolean {
   return status === 'failed' || status === 'error' || status === 'no_job' || status === 'unsupported';
 }
 
+/**
+ * Predicate: status is an active/in-progress state (job pending or currently generating).
+ * Used to show spinner instead of static icon in status pill.
+ */
 function isActiveStatus(status: RegenerationStatusInfo['status']): boolean {
   return status === 'pending' || status === 'image_generating';
 }
 
+/**
+ * Main render function for content result card.
+ * Displays: thumbnail/placeholder, title, type/identifier metadata, access badge,
+ * optional description, and optional regeneration controls.
+ *
+ * LAYOUT:
+ * - Row container: thumbnail (left, fixed 72x72) + body (flex, right)
+ * - Body: title row, metadata row, description, regeneration section
+ *
+ * INTERACTIONS:
+ * - onPress: Navigate to detail screen
+ * - onRegenerate: Trigger thumbnail regeneration (if button shown)
+ * - Tests use testID combining collection + item id for finding specific cards
+ */
 export function ContentManagerResultCard({
   item,
   onPress,

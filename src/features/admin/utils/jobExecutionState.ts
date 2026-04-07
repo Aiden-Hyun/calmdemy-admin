@@ -4,6 +4,7 @@
  * ARCHITECTURAL ROLE:
  * Bridges the dual-engine architecture by synthesizing ContentJob (legacy) and
  * FactoryJob (new V2 engine) states into a unified JobExecutionView.
+ * Converts factory step names to legacy JobStatus for UI backward compatibility.
  *
  * DESIGN PATTERNS:
  * - State Machine synthesis: Resolves two parallel state machines into canonical status
@@ -15,11 +16,21 @@
  * - Effective status: The user-visible status (resolved from all sources)
  * - Status source: Where the effective status was sourced (content_job, factory_job, or mixed)
  * - Projection drift: Discrepancies between legacy projection and factory truth
+ * - Fresh dispatch: Pending/publishing job with idle engine = ready for new run
  *
  * MULTI-ENGINE COORDINATION:
- * V1 (legacy): ContentJob.status (a projection of execution state)
- * V2 (factory): FactoryJob + FactoryJobRun (source of truth for v2 jobs)
- * Resolution: If V2 job has factory state, use it; else fall back to ContentJob.status
+ * V1 (legacy): ContentJob.status (a projection of execution state; stale)
+ * V2 (factory): FactoryJob + FactoryJobRun (authoritative source for v2 jobs)
+ * Resolution logic:
+ *   1. If V2 job with active factory state: use factory truth
+ *   2. If job paused (any source): status = paused
+ *   3. If engine idle but job pending: keep pending (fresh dispatch)
+ *   4. Else: fall back to ContentJob.status
+ *
+ * DRIFT DETECTION:
+ * Compares ContentJob.status/v2RunId against FactoryJob actual state.
+ * Reports mismatches (e.g., projection says "running" but factory says "completed").
+ * Helps debug sync issues between legacy projection and factory truth.
  */
 
 import {

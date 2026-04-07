@@ -1,3 +1,28 @@
+/**
+ * Paywall/Subscription Modal Component
+ *
+ * Architectural Role:
+ * Presentation layer component for subscription purchase flow. Integrates with
+ * SubscriptionContext (via RevenueCat) to handle purchases, subscription recovery,
+ * and anonymous user account prompts. Part of the monetization feature in MVVM.
+ *
+ * Design Patterns:
+ * - Controlled Component: Modal visibility controlled by parent via visible/onClose props
+ * - State Machine: Multi-step recovery flow (normal purchase vs. recovery-first UI)
+ * - Composition: Embeds AccountPromptModal and RecoveryWizard for orchestrated flows
+ * - Memoized Styling: useMemo for theme-dependent styles to prevent unnecessary recalculations
+ *
+ * Key Dependencies:
+ * - useSubscription: RevenueCat integration, package fetching, purchase orchestration
+ * - useTheme: Theme colors and typography
+ * - useAuth: User authentication state (to show account prompt for anonymous users)
+ * - useSafeAreaInsets: Safe area padding for notches/home indicators
+ *
+ * Consumed By:
+ * - PremiumGate component (gates premium content)
+ * - Premium features throughout the app when user lacks subscription
+ */
+
 import React, { useState, useMemo, useEffect } from "react";
 import {
   View,
@@ -29,6 +54,7 @@ interface PaywallModalProps {
   onSuccess?: () => void;
 }
 
+/** Feature list highlighting premium benefits; displayed prominently in the paywall */
 const FEATURES = [
   { icon: "infinite-outline", text: "Unlimited meditations & courses" },
   { icon: "moon-outline", text: "All sleep content & stories" },
@@ -37,6 +63,17 @@ const FEATURES = [
   { icon: "sparkles-outline", text: "New content weekly" },
 ];
 
+/**
+ * PaywallModal - Subscription purchase interface with smart recovery flow
+ *
+ * Intelligently switches between two UI flows:
+ * 1. Normal Purchase Flow: New/non-premium users see subscription options
+ * 2. Recovery-First Flow: Users with active Apple ID subscription but no current
+ *    account premium status see account recovery UI first
+ *
+ * This prevents friction when users have subscriptions on their device but are
+ * logged into a different account.
+ */
 export function PaywallModal({
   visible,
   onClose,
@@ -60,30 +97,43 @@ export function PaywallModal({
   const [showAccountPrompt, setShowAccountPrompt] = useState(false);
   const [showRecoveryWizard, setShowRecoveryWizard] = useState(false);
 
-  // Check if we should show recovery-first UI
-  // Apple ID has active subscription but current account doesn't own it
+  /**
+   * Recovery-First UI Logic:
+   * If the device's App Store account has an active subscription, but the currently
+   * logged-in user doesn't have premium status, we show recovery UI instead of the
+   * purchase flow. This happens when a user logs into a different account on a device
+   * that already has a subscription under a different Apple ID.
+   */
   const shouldShowRecoveryFirst =
     hasActiveSubscriptionOnAppleId() && !isPremium;
 
-  // Get monthly and annual packages from offering
-  // Try standard package identifiers first, then fall back to searching availablePackages
-  const monthlyPackage = currentOffering?.monthly || 
-    currentOffering?.availablePackages?.find(p => 
-      p.identifier === '$rc_monthly' || 
+  /**
+   * Package Extraction:
+   * RevenueCat Offering structure is flexible. We try standard properties first,
+   * then fall back to searching availablePackages array. This handles variations
+   * in backend RevenueCat configuration.
+   */
+  const monthlyPackage = currentOffering?.monthly ||
+    currentOffering?.availablePackages?.find(p =>
+      p.identifier === '$rc_monthly' ||
       p.identifier.toLowerCase().includes('monthly')
     );
-  const annualPackage = currentOffering?.annual || 
-    currentOffering?.availablePackages?.find(p => 
-      p.identifier === '$rc_annual' || 
+  const annualPackage = currentOffering?.annual ||
+    currentOffering?.availablePackages?.find(p =>
+      p.identifier === '$rc_annual' ||
       p.identifier.toLowerCase().includes('annual') ||
       p.identifier.toLowerCase().includes('yearly')
     );
-  
-  // Check if offerings are available
+
+  // Derived state to simplify conditional rendering
   const hasPackages = monthlyPackage || annualPackage;
   const isLoadingOfferings = isLoading && !currentOffering;
 
-  // Calculate savings for annual
+  /**
+   * Savings Calculation:
+   * Compare annual cost to monthly cost * 12 to show savings percentage.
+   * Memoized to avoid unnecessary recalculation on parent re-renders.
+   */
   const annualSavings = useMemo(() => {
     if (!monthlyPackage || !annualPackage) return null;
     const monthlyPrice = monthlyPackage.product.price;
@@ -93,6 +143,11 @@ export function PaywallModal({
     return savings > 0 ? savings : null;
   }, [monthlyPackage, annualPackage]);
 
+  /**
+   * Purchase Handler:
+   * Executes RevenueCat purchase flow. On success, shows account creation prompt
+   * for anonymous users (common in trial scenarios).
+   */
   const handlePurchase = async () => {
     if (!selectedPackage) return;
 
@@ -103,13 +158,20 @@ export function PaywallModal({
     if (success) {
       onSuccess?.();
       onClose();
-      // Show account prompt for anonymous users after successful purchase
+      // Anonymous users should create an account to preserve their subscription
+      // and access across devices
       if (isAnonymous) {
         setShowAccountPrompt(true);
       }
     }
   };
 
+  /**
+   * Restore Purchases Handler:
+   * Calls RevenueCat's restore with built-in recovery logic. If the restore
+   * detects a subscription on the Apple ID but not on the current account,
+   * it triggers the recovery wizard flow.
+   */
   const handleRestore = async () => {
     setIsPurchasing(true);
     const result = await restorePurchasesWithRecovery();
@@ -119,17 +181,25 @@ export function PaywallModal({
       onSuccess?.();
       onClose();
     } else if (result.showRecoveryWizard) {
-      // Subscription exists on Apple ID but belongs to different account
+      // Defer recovery UI to be shown in a separate modal
       setShowRecoveryWizard(true);
     }
   };
 
+  /**
+   * Recovery Success Callback:
+   * User successfully recovered their subscription and signed into the correct account.
+   */
   const handleRecoverySuccess = () => {
     setShowRecoveryWizard(false);
     onSuccess?.();
     onClose();
   };
 
+  /**
+   * Opens device mail client with pre-filled support email.
+   * Uses URL encoding for proper email client handling.
+   */
   const handleContactSupport = () => {
     const subject = encodeURIComponent("Subscription Help");
     const body = encodeURIComponent(
@@ -140,6 +210,7 @@ export function PaywallModal({
     );
   };
 
+  /** Format RevenueCat price string with period (e.g., "$9.99/month") */
   const formatPrice = (pkg: PurchasesPackage | undefined, period: string) => {
     if (!pkg) return "...";
     return `${pkg.product.priceString}/${period}`;

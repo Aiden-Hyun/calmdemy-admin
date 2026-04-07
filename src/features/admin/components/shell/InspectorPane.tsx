@@ -1,3 +1,23 @@
+/**
+ * Right-hand inspector pane showing selected job details.
+ *
+ * ARCHITECTURAL ROLE:
+ * Displays full job detail view (narrower variant) in responsive right column.
+ * Resolves all job metadata and actions via useJobDetailActions hook.
+ *
+ * DESIGN PATTERN:
+ * - Facade pattern: useJobDetailActions hides complexity of job data resolution
+ * - Responsive layout: layoutMode='inspector' constrains width for fixed pane
+ * - Lazy loading: Only loads detail data when job is selected
+ * - Empty state: Shows placeholder when no job selected
+ *
+ * CONTENT:
+ * When no job selected: Shows help text "Select a job from the list..."
+ * When job selected: Shows full JobDetailView with all metadata, timeline, actions
+ * When loading: Shows activity indicator
+ * When not found: Shows error state (job was deleted/unavailable)
+ */
+
 import React, { useMemo } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';

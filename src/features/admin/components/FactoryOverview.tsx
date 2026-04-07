@@ -1,21 +1,33 @@
 /**
- * Factory overview & worker control dashboard.
+ * Factory system overview and local worker control dashboard.
  *
  * ARCHITECTURAL ROLE:
- * Shows system-wide metrics (pending, active, completed) and worker control panel.
- * Allows admin to start/stop/restart local worker and configure auto-mode.
+ * Displays real-time factory metrics (job queue counts, worker status) and
+ * provides UI for admin to control local worker (start/stop/restart/idle timeout).
  *
- * KEY SECTIONS:
- * 1. Stats: Job queue counts (pending, active, paused, completed)
- * 2. Local Worker: Heartbeat status (online/stale/offline) + control buttons
- * 3. Stacks: Worker stack status (role, TTS models, pid, log path)
- * 4. Controls: Auto-mode toggle, start/stop buttons, idle timeout, restart
+ * DESIGN PATTERN:
+ * - Metrics display: 4 stat cards (Queued, Processing, Paused, Done)
+ * - Worker status: Color-coded heartbeat indicator (online/stale/offline)
+ * - Stack visibility: Shows all worker stacks with role, TTS models, PID, log path
+ * - Control panel: Auto-mode toggle, manual start/stop, idle timeout chips, restart
+ * - Optimistic UI: Local state tracks pending actions (start_clicked, stop_clicked)
  *
  * WORKER STATE MACHINE:
- * - Auto mode: Worker starts on pending jobs, stops after idle timeout
- * - Manual: Start Now / Stop Now buttons directly control worker
- * - Optimistic UI: Local state tracks pending actions (start_clicked, stop_clicked)
- * - Heartbeat: Worker updates lastHeartbeat; stale detection via age > 2x poll interval
+ * - Auto mode: Worker auto-starts when pending jobs exist; stops after idle timeout
+ * - Manual mode: Start Now / Stop Now buttons directly control worker state
+ * - Heartbeat detection: Online (age <= 2x interval), Stale (age > 2x), Offline (no heartbeat)
+ * - Optimistic rendering: Shows intent immediately; settles when backend confirms
+ *
+ * CONTROLS:
+ * - Auto-mode toggle: Enable/disable automatic worker lifecycle management
+ * - Start Now: Immediately start local worker
+ * - Stop Now: Immediately stop local worker
+ * - Restart Worker: Kill and restart (useful for clearing stuck state)
+ * - Idle Timeout: Set 5m/10m/30m before auto-stop (when in auto mode)
+ *
+ * STATES:
+ * - Collapsed: Shows summary (queued count, processing count, done count)
+ * - Expanded: Shows full metrics, worker card, stacks, controls
  */
 
 import React, { useMemo, useState } from 'react';

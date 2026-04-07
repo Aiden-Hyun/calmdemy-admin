@@ -1,3 +1,30 @@
+/**
+ * ReportModal Component
+ *
+ * Architectural Role:
+ * User feedback/content reporting interface. Allows users to flag problematic
+ * content (audio issues, wrong content, inappropriate material, etc.). Integrates
+ * with backend reporting system via onSubmit callback.
+ *
+ * Design Patterns:
+ * - Modal Form: Controlled form with validation before submission
+ * - Category Selection: Predefined categories with optional free-text
+ * - Optimistic Feedback: Shows success UI while closing
+ *
+ * Key Dependencies:
+ * - useTheme: Theme styling
+ * - Modal from react-native: Bottom-sheet style presentation
+ *
+ * Consumed By:
+ * - Media player header (report button)
+ * - Content cards (flagging issues)
+ *
+ * Design Notes:
+ * - No submission without a category (prevents spam)
+ * - Description is optional but encouraged for "Other" category
+ * - Success feedback auto-closes after 1.5s (UX best practice)
+ */
+
 import React, { useState } from 'react';
 import {
   View,
@@ -19,10 +46,16 @@ import { ReportCategory } from '@/types';
 interface ReportModalProps {
   visible: boolean;
   onClose: () => void;
+  /** Async callback that handles report submission; returns success boolean */
   onSubmit: (category: ReportCategory, description?: string) => Promise<boolean>;
+  /** Optional title of reported content (displayed in modal header) */
   contentTitle?: string;
 }
 
+/**
+ * Predefined report categories with icons and explanatory text.
+ * Helps users quickly categorize issues without lengthy descriptions.
+ */
 const REPORT_CATEGORIES: { id: ReportCategory; label: string; icon: keyof typeof Ionicons.glyphMap; description: string }[] = [
   {
     id: 'audio_issue',
@@ -50,6 +83,16 @@ const REPORT_CATEGORIES: { id: ReportCategory; label: string; icon: keyof typeof
   },
 ];
 
+/**
+ * ReportModal - Bottom-sheet form for reporting content issues
+ *
+ * Flow:
+ * 1. User selects a category
+ * 2. Optionally adds description
+ * 3. Submits report
+ * 4. Shows success feedback
+ * 5. Auto-closes after 1.5s
+ */
 export function ReportModal({
   visible,
   onClose,
@@ -58,21 +101,27 @@ export function ReportModal({
 }: ReportModalProps) {
   const { theme, isDark } = useTheme();
   const styles = React.useMemo(() => createStyles(theme, isDark), [theme, isDark]);
-  
+
   const [selectedCategory, setSelectedCategory] = useState<ReportCategory | null>(null);
   const [description, setDescription] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
 
+  /**
+   * Submit Handler:
+   * Calls parent's onSubmit with category and optional description.
+   * Shows success feedback and auto-closes on success.
+   */
   const handleSubmit = async () => {
     if (!selectedCategory) return;
-    
+
     setIsSubmitting(true);
     const success = await onSubmit(selectedCategory, description.trim() || undefined);
     setIsSubmitting(false);
-    
+
     if (success) {
       setShowSuccess(true);
+      // Auto-close after success feedback is displayed
       setTimeout(() => {
         setShowSuccess(false);
         setSelectedCategory(null);
@@ -82,6 +131,10 @@ export function ReportModal({
     }
   };
 
+  /**
+   * Close Handler:
+   * Resets form state without submitting.
+   */
   const handleClose = () => {
     setSelectedCategory(null);
     setDescription('');

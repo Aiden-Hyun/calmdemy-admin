@@ -1,3 +1,25 @@
+/**
+ * Content creation form for job submission.
+ *
+ * ARCHITECTURAL ROLE:
+ * Comprehensive form for creating content jobs with dynamic fields based on contentType.
+ * Handles single content, courses, and full subject curriculum generation.
+ *
+ * DESIGN PATTERNS:
+ * - Progressive disclosure: Shows/hides fields based on contentType selection
+ * - Conditional validation: Submit disabled based on content type requirements
+ * - Form state management: All fields passed as props (controlled inputs)
+ * - Dynamic UI: Course-specific, subject-specific fields rendered conditionally
+ *
+ * FLOW:
+ * 1. Admin selects contentType (meditation, course, full_subject)
+ * 2. Form reveals relevant fields (topic, duration, course code, etc.)
+ * 3. For full_subject: show level counts, calculate total courses, warn if >20
+ * 4. Model selection: LLM backend -> TTS backend -> TTS model -> voice
+ * 5. Approval checkboxes: Script approval, subject plan approval toggles
+ * 6. Submit validation: Full subject requires subject + valid course count
+ */
+
 import React, { useMemo } from 'react';
 import {
   View,

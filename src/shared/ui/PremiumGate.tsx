@@ -1,3 +1,26 @@
+/**
+ * Premium Content Gate Component
+ *
+ * Architectural Role:
+ * Conditional rendering wrapper that enforces subscription requirements for premium
+ * features. Provides three modes: free access, lock overlay, or lock badge. Bridges
+ * the subscription context with content presentation.
+ *
+ * Design Patterns:
+ * - Gating Pattern: Conditional rendering based on subscription status
+ * - Composition: Composes PaywallModal for monetization flow
+ * - Hook-based State: usePremiumAccess encapsulates access control logic
+ *
+ * Key Dependencies:
+ * - useSubscription: subscription/premium status
+ * - usePremiumAccess: Hook that checks if content access is granted
+ * - useTheme: Theme styling
+ *
+ * Consumed By:
+ * - Any premium content containers throughout the app (meditation cards, courses, etc.)
+ * - Used to gate features like offline downloads, full course access
+ */
+
 import React, { useState, useMemo } from "react";
 import {
   View,
@@ -15,17 +38,24 @@ import { Theme } from "@/theme";
 
 interface PremiumGateProps {
   children: React.ReactNode;
+  /** Whether the wrapped content is premium (if false, always shows children) */
   isPremium?: boolean;
-  /** Show inline lock badge instead of blocking content */
+  /** Show inline lock badge instead of blocking content entirely */
   showBadgeOnly?: boolean;
-  /** Callback when premium content is accessed */
+  /** Callback when user successfully accesses premium content */
   onAccessGranted?: () => void;
   style?: ViewStyle;
 }
 
 /**
- * Wrapper component that gates premium content.
- * If content is premium and user is not subscribed, shows paywall.
+ * PremiumGate - Flexible content access control wrapper
+ *
+ * Three rendering modes:
+ * 1. Free Content: Non-premium or user has access -> renders children directly
+ * 2. Badge Mode: Shows children with a lock badge overlay (use for card thumbnails)
+ * 3. Lock Overlay: Full blocking gradient overlay (use for full-screen content)
+ *
+ * This component orchestrates the paywall presentation when needed.
  */
 export function PremiumGate({
   children,
@@ -37,12 +67,12 @@ export function PremiumGate({
   const { canAccess, isLoading } = usePremiumAccess(isPremium);
   const [showPaywall, setShowPaywall] = useState(false);
 
-  // If not premium content or user has access, render children directly
+  // Free content or user has access -> render children as-is
   if (!isPremium || canAccess) {
     return <>{children}</>;
   }
 
-  // If showing badge only, wrap children with badge
+  // Badge mode: overlay a small lock badge on the content for subtle premium indication
   if (showBadgeOnly) {
     return (
       <View style={style}>
@@ -57,7 +87,7 @@ export function PremiumGate({
     );
   }
 
-  // Default: block content with lock overlay
+  // Default: full blocking overlay with unlock call-to-action
   return (
     <View style={style}>
       <PremiumLockOverlay onUnlock={() => setShowPaywall(true)} />
@@ -71,7 +101,10 @@ export function PremiumGate({
 }
 
 /**
- * Small premium badge to show on cards
+ * PremiumBadge - Small lock indicator for card-style layouts
+ *
+ * Displays a lock icon badge in the top-right corner of content.
+ * Hidden for premium users (doesn't render). Two size options for flexibility.
  */
 interface PremiumBadgeProps {
   onPress?: () => void;
@@ -82,7 +115,7 @@ export function PremiumBadge({ onPress, size = "small" }: PremiumBadgeProps) {
   const { theme } = useTheme();
   const { isPremium } = useSubscription();
 
-  // Don't show badge if user is premium
+  // Premium users don't see the badge at all
   if (isPremium) return null;
 
   const iconSize = size === "small" ? 10 : 14;
@@ -109,7 +142,11 @@ export function PremiumBadge({ onPress, size = "small" }: PremiumBadgeProps) {
 }
 
 /**
- * Full lock overlay for blocking content
+ * PremiumLockOverlay - Full-screen blocking gradient overlay
+ *
+ * Used for prominent premium content (full meditations, courses) that should
+ * completely block content until subscribed. Uses gradient background to
+ * maintain visual consistency with the app's design system.
  */
 interface PremiumLockOverlayProps {
   onUnlock: () => void;
@@ -147,7 +184,11 @@ function PremiumLockOverlay({ onUnlock }: PremiumLockOverlayProps) {
 }
 
 /**
- * Hook for checking if content should show premium lock
+ * useContentAccess - Legacy hook for checking content access
+ *
+ * Provides manual control over access checks and paywall visibility.
+ * Useful in scenarios where you need fine-grained control over when to show
+ * the paywall vs. when to allow access without rendering PremiumGate wrapper.
  */
 export function useContentAccess(isPremiumContent: boolean) {
   const { isPremium, isLoading } = useSubscription();

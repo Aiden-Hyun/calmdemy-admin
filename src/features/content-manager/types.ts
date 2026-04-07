@@ -32,6 +32,12 @@ import { ContentReportStatus, ReportCategory } from '@/types';
  * Union type representing all supported content collections in the app.
  * Used to scope queries, apply collection-specific logic, and validate content types.
  * Each collection maps to a Firestore collection and has unique metadata/editing rules.
+ *
+ * DESIGN NOTE:
+ * - Nominal type union (string literal types combined with |) enables compile-time exhaustiveness checking
+ *   on switch statements and type guards (e.g., isContentManagerCollection() below)
+ * - Adding a new collection requires updates to: CONTENT_MANAGER_COLLECTIONS array, CONTENT_MANAGER_COLLECTION_LABELS map,
+ *   edit config, normalizers in contentManagerRepository, and UI filter options
  */
 export type ContentManagerCollection =
   | 'guided_meditations'

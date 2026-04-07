@@ -1,3 +1,52 @@
+/**
+ * Comprehensive job detail view with timeline, approval modals, and actions.
+ *
+ * ARCHITECTURAL ROLE:
+ * Full-featured job inspector showing all metadata, execution progress, approval
+ * workflows, and admin actions. Used in both fullscreen route and inspector pane.
+ *
+ * DESIGN PATTERNS:
+ * - Section-based UI: Collapsible sections for logical grouping (pipeline, details, timing)
+ * - Modal approval workflows: Inline modals for script/plan approval with editing
+ * - Responsive layout: Two-column on web (fullscreen mode), single column on mobile/inspector
+ * - State aggregation: Merges ContentJob, FactoryJob, timeline, child jobs
+ * - Derived flags: Computed booleans (isAwaitingApproval, isDeletable, isReviewable)
+ *
+ * SECTIONS (COLLAPSIBLE):
+ * 1. Pipeline: PipelineStepper showing execution progress
+ * 2. Workers: Active worker assignments and heartbeats
+ * 3. Step Timeline: V2 factory step timeline with state transitions
+ * 4. Course Progress: For courses, detailed pipeline map + worker swimlanes
+ * 5. Job Details: Config (backend, model, duration, params)
+ * 6. Timing Metrics: effectiveElapsedMs, parallelism, queue latency
+ * 7. Subject Progress: For full_subject, child job tree + state
+ * 8. Subject Plan: For full_subject, course lineup + approval workflow
+ * 9. Subject Children: List of child course jobs
+ * 10. Course Plan/Scripts: Course structure and formatted scripts
+ * 11. Thumbnail: Preview + regeneration
+ * 12. Error: Display errors for failed jobs
+ *
+ * APPROVAL WORKFLOWS:
+ * - Script approval: Modal editor for raw/formatted scripts; approve/reject
+ * - Subject plan approval: Modal editor for course titles/descriptions; approve/reject
+ * - Course regeneration: Mode selector (audio_only/script_and_audio), session selection
+ * - Publish: Confirmation dialog for course/content publishing
+ *
+ * ACTION BUTTONS:
+ * - Retry: Resume from last completed stage
+ * - Cancel: Stop in-progress job
+ * - Publish: Make content visible to users (different messages for regeneration)
+ * - Delete: Request job deletion (with warnings for full_subject)
+ * - Pause/Resume: For full_subject jobs
+ * - Approve: For approval workflows (scripts, plans)
+ * - Generate Thumbnail: For completed courses
+ * - Regenerate: For courses, regenerate sessions
+ *
+ * RESPONSIVE:
+ * layoutMode='fullscreen' (default): Uses viewport width for multi-column layout
+ * layoutMode='inspector': Forces single column for narrow pane (560px max)
+ */
+
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,

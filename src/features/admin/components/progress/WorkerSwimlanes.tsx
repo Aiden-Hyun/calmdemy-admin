@@ -1,3 +1,25 @@
+/**
+ * Worker swimlanes view showing execution timeline per worker.
+ *
+ * ARCHITECTURAL ROLE:
+ * Shows horizontal timeline of steps executed by each worker on a course job.
+ * Reveals which worker ran which steps, latencies, retries, and errors.
+ * Useful for debugging parallelism, worker affinity, and scheduling issues.
+ *
+ * DESIGN PATTERN:
+ * - Swimlanes: One row per active worker, items in chronological order
+ * - Expandable: Workers collapse to summary (latest step + session), expand to timeline
+ * - Bulk toggle: Expand All / Collapse All button for quick navigation
+ * - Summary chips: Shows current step, shard, and attempt count when collapsed
+ *
+ * DISPLAY:
+ * 1. Run ID badge (from factory execution)
+ * 2. Expand/Collapse All toggle button
+ * 3. Worker card per lane: Shows step count and summary when collapsed
+ * 4. Expanded view: Timeline of steps with state, shard, attempt, and errors
+ * 5. Latest/Current indicator: Highlights active execution vs. history
+ */
+
 import React, { useEffect, useMemo, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, Text, View } from 'react-native';

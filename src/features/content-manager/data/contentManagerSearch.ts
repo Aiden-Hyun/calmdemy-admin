@@ -45,6 +45,8 @@ const NO_THUMBNAIL_COLLECTIONS: Set<ContentManagerCollection> = new Set([
 
 /**
  * Normalizes search query: trim, lowercase, for case-insensitive matching.
+ * Empty query (after trim) returns empty string; treated as "no search" by caller.
+ *
  * @param value - Raw search input from text field
  * @returns Normalized query string (empty if falsy input)
  */
@@ -52,6 +54,11 @@ function normalizeSearchValue(value?: string): string {
   return String(value || '').trim().toLowerCase();
 }
 
+/**
+ * Secondary sort comparator for search results.
+ * When two results have the same rank, sort A-Z by title, then by ID.
+ * Provides stable, predictable ordering within rank tiers.
+ */
 function compareAlphabetically(
   left: ContentManagerItemSummary,
   right: ContentManagerItemSummary

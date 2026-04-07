@@ -22,10 +22,23 @@ import {
 
 /**
  * Simple substring match check across multiple report fields.
- * Joins enriched fields (title, identifier) with raw fields (id, description) and searches.
+ * Joins enriched fields (title, identifier from resolved content) with raw fields (id, description)
+ * and performs case-insensitive substring match.
+ *
+ * QUERY SEMANTICS:
+ * - Empty query always matches (no filtering)
+ * - Non-empty: must appear as substring in at least one field
+ * - No ranking like content search; reports don't need BM25-style prioritization
+ *
+ * FIELDS SEARCHED:
+ * - contentTitle: Admin-facing title of the reported content (e.g., meditation name)
+ * - contentIdentifier: Code or ID of the reported content
+ * - contentId: Raw Firestore document ID
+ * - contentType: Report content type string (backend naming)
+ * - description: User-provided report comment
  *
  * @param report - Report to match against
- * @param query - Normalized search query (lowercase)
+ * @param query - Normalized search query (lowercase, trimmed)
  * @returns true if query found in any searchable field
  */
 function matchesQuery(report: ContentManagerReportSummary, query: string): boolean {

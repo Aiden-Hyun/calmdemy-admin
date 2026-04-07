@@ -1,3 +1,28 @@
+/**
+ * Rich job card for list view with status badges and quick actions.
+ *
+ * ARCHITECTURAL ROLE:
+ * Master-Detail pattern: renders single job in list. Shows execution state via
+ * dual-engine resolution (ContentJob + FactoryJob/Run). Provides quick-action
+ * buttons (publish, generate thumbnail) and worker visibility.
+ *
+ * DESIGN PATTERNS:
+ * - Dual-engine state resolution: Subscribes to factory state for V2 jobs
+ * - Memoized derived state: Expensive computations (timing labels, badges) cached
+ * - Quick actions: Publish and thumbnail buttons with event propagation control
+ * - Smart badge system: Show different badges based on job state/type
+ *
+ * DISPLAY SECTIONS:
+ * 1. Header: Status badge (colored by status) + time created ("2h ago")
+ * 2. Headline: Topic/title, formatted by content type
+ * 3. Metadata: Type, duration/courses, model name
+ * 4. Thumbnail: Preview image (if available for courses)
+ * 5. Action badges: Publish status, thumbnail generation status
+ * 6. Progress badges: TTS progress (courses only), timing metrics
+ * 7. Workers: Active worker stack IDs executing this job
+ * 8. Error: Display if job failed
+ */
+
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, GestureResponderEvent, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';

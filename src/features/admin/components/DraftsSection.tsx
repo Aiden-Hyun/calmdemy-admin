@@ -1,3 +1,21 @@
+/**
+ * Display list of locally saved draft jobs.
+ *
+ * ARCHITECTURAL ROLE:
+ * Shows previews of draft jobs with quick actions (load, delete).
+ * Drafts are stored in local AsyncStorage; not persisted to Firestore.
+ *
+ * DESIGN PATTERN:
+ * - Card list: Each draft shown as pressable card with metadata
+ * - Quick actions: Delete button (with event propagation stop)
+ * - Smart labeling: Different labels for courses, subjects, single content
+ * - Time display: Shows "Updated X ago" for LRU-like UX
+ *
+ * VISIBILITY LOGIC:
+ * Section renders only if drafts.length > 0.
+ * Useful for offline work: users can save incomplete forms to resume later.
+ */
+
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';

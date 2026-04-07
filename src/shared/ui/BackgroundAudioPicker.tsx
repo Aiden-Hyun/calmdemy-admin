@@ -1,3 +1,30 @@
+/**
+ * BackgroundAudioPicker.tsx
+ *
+ * Architectural Role:
+ * Shared UI component that provides a modal-based interface for selecting background ambient
+ * sounds (rain, water, fire, etc.) during meditation playback. Part of the MediaPlayer's audio
+ * enhancement ecosystem. Loads sounds from Firestore and manages selection state.
+ *
+ * Design Patterns:
+ * - Controlled Component: Parent passes all state (selectedSoundId, volume, isEnabled) and
+ *   callbacks (onSelectSound, onVolumeChange, onToggleEnabled). This modal is presentation-only.
+ * - Category Filtering: Dynamically derives categories from loaded sound data rather than
+ *   hardcoding them. Improves maintainability when new categories are added to Firestore.
+ * - State Indicators: Uses three-state logic (selected, loading, error) to show rich feedback
+ *   for each sound item (checkmark, spinner, or error icon).
+ *
+ * Key Dependencies:
+ * - @react-native-community/slider: Range slider for volume control
+ * - getSleepSounds(): Fetches FirestoreSleepSound[] on modal visibility
+ * - ThemeContext: Theme colors and spacing
+ * - Ionicons: Category and state indicator icons
+ *
+ * Consumed By:
+ * - MediaPlayer component (via showBackgroundPicker modal prop)
+ * - Features needing ambient sound selection during playback
+ */
+
 import React, { useState, useMemo, useEffect } from "react";
 import {
   View,
@@ -15,6 +42,10 @@ import { useTheme } from "@core/providers/contexts/ThemeContext";
 import { Theme } from "@/theme";
 import { getSleepSounds, FirestoreSleepSound } from "@features/music/data/musicRepository";
 
+/**
+ * Icon mappings and labels are static lookup tables that define the visual
+ * identity for each sound category. Keep in sync with Firestore category names.
+ */
 // Category icon mapping - used for display purposes
 const categoryIcons: Record<string, keyof typeof Ionicons.glyphMap> = {
   all: "apps",
@@ -70,6 +101,10 @@ export function BackgroundAudioPicker({
   const [allSounds, setAllSounds] = useState<FirestoreSleepSound[]>([]);
   const [loadingSounds, setLoadingSounds] = useState(true);
 
+  /**
+   * Load sounds from Firestore when modal becomes visible.
+   * Runs only once per visibility toggle to avoid unnecessary network calls.
+   */
   useEffect(() => {
     async function loadSounds() {
       setLoadingSounds(true);
@@ -82,20 +117,33 @@ export function BackgroundAudioPicker({
     }
   }, [visible]);
 
-  // Derive categories dynamically from the sounds data
+  /**
+   * Dynamically derive unique categories from loaded sounds. This avoids hardcoding
+   * categories and ensures new categories added to Firestore appear automatically.
+   * Always puts 'all' first, then sorts the rest alphabetically for consistent UX.
+   */
   const categories = useMemo(() => {
     const uniqueCats = [...new Set(allSounds.map((s) => s.category))];
     // Sort alphabetically and add 'all' at the beginning
     return ["all", ...uniqueCats.sort()];
   }, [allSounds]);
 
+  /**
+   * Filter sounds by active category. When "all" is selected, show everything.
+   * This allows users to browse the full library or narrow by interest.
+   */
   const filteredSounds = useMemo(
-    () => activeCategory === "all" 
-      ? allSounds 
+    () => activeCategory === "all"
+      ? allSounds
       : allSounds.filter((sound) => sound.category === activeCategory),
     [activeCategory, allSounds]
   );
 
+  /**
+   * Toggle sound selection. If tapped sound is already selected, deselect it (off).
+   * If a new sound is tapped, enable the audio if it wasn't already on.
+   * This creates a natural toggle-to-enable behavior without requiring a separate "on" button.
+   */
   const handleSoundSelect = (sound: FirestoreSleepSound) => {
     if (selectedSoundId === sound.id) {
       // Deselect if already selected
@@ -220,6 +268,14 @@ export function BackgroundAudioPicker({
                 <ActivityIndicator size="small" color="#7DAFB4" />
               </View>
             ) : filteredSounds.map((sound) => {
+              /**
+               * Derive three-state visual feedback for each sound item:
+               * 1. Error (red circle): Audio failed to load
+               * 2. Loading (spinner): Audio is selected but still buffering
+               * 3. Ready (checkmark): Audio is selected and ready to play
+               *
+               * Only one indicator shows per item based on the parent MediaPlayer's audio state.
+               */
               const isThisSoundSelected = selectedSoundId === sound.id && isEnabled;
               // Show error if this sound is selected and has error
               const showError = isThisSoundSelected && hasError;

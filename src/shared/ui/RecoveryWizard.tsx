@@ -1,3 +1,34 @@
+/**
+ * RecoveryWizard Component
+ *
+ * Architectural Role:
+ * Multi-step authentication wizard for account recovery. Activated when a user's
+ * Apple ID/device has an active subscription but the current in-app account is
+ * not premium. Guides the user through multiple sign-in methods to find the
+ * correct account linked to the subscription.
+ *
+ * Design Patterns:
+ * - State Machine: Step-based flow with distinct render paths per step
+ * - Multi-Modal: Shows help tips and success screens alongside auth methods
+ * - Graceful Degradation: Works on iOS (with Apple) and Android (Google only)
+ *
+ * Key Dependencies:
+ * - useAuth: Sign-in methods (Apple, Google, email)
+ * - useSubscription: Subscription status verification after sign-in
+ * - useTheme: Theme styling
+ *
+ * Consumed By:
+ * - PaywallModal (when hasActiveSubscriptionOnAppleId && !isPremium)
+ *
+ * User Flow:
+ * 1. Choose sign-in method (Apple Sign-In, Google, Email)
+ * 2. Authenticate with chosen method
+ * 3. System checks if signed-in account has subscription
+ * 4. If success: show success screen
+ * 5. If wrong account: show tips/help screen
+ * 6. User can retry or contact support
+ */
+
 import React, { useMemo, useState } from "react";
 import {
   View,
@@ -25,6 +56,7 @@ interface RecoveryWizardProps {
   onSuccess?: () => void;
 }
 
+/** Step in the recovery flow */
 type RecoveryStep = "methods" | "email_login" | "tips" | "success";
 
 export function RecoveryWizard({
@@ -50,19 +82,25 @@ export function RecoveryWizard({
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
+  /**
+   * Google Sign-In Handler:
+   * Signs in with Google, checks subscription status, and advances to success
+   * if the account has a premium subscription.
+   *
+   * Anti-enumeration: Generic error message prevents user enumeration attacks.
+   */
   const handleGoogleSignIn = async () => {
     setIsLoading(true);
     try {
       await signInWithGoogle();
-      // Check if premium is now active
+      // Refetch subscription status from RevenueCat
       await checkSubscriptionStatus();
-      // Small delay to let state update
+      // Small delay allows context updates to propagate
       setTimeout(() => {
         if (isPremium) {
           setStep("success");
           onSuccess?.();
         } else {
-          // Still not premium, show message
           Alert.alert(
             "Not the Right Account",
             "This account doesn't have an active subscription. Try another sign-in method."
@@ -70,13 +108,16 @@ export function RecoveryWizard({
         }
       }, 500);
     } catch (error: any) {
-      // Use generic message for anti-enumeration
       Alert.alert("Unable to Sign In", "Please try again or use another method.");
     } finally {
       setIsLoading(false);
     }
   };
 
+  /**
+   * Apple Sign-In Handler:
+   * iOS-specific sign-in flow. Validates subscription after authentication.
+   */
   const handleAppleSignIn = async () => {
     setIsLoading(true);
     try {
@@ -100,6 +141,11 @@ export function RecoveryWizard({
     }
   };
 
+  /**
+   * Email/Password Sign-In Handler:
+   * Validates input and signs in with credentials. Falls back to email sign-in
+   * when users can't/don't remember their social sign-in method.
+   */
   const handleEmailSignIn = async () => {
     if (!email.trim() || !password.trim()) {
       Alert.alert("Required", "Please enter your email and password.");
@@ -121,13 +167,16 @@ export function RecoveryWizard({
         }
       }, 500);
     } catch (error: any) {
-      // Generic message for anti-enumeration
       Alert.alert("Unable to Sign In", "Please check your credentials and try again.");
     } finally {
       setIsLoading(false);
     }
   };
 
+  /**
+   * Forgot Password Handler:
+   * Sends password reset email. Uses generic success message for anti-enumeration.
+   */
   const handleForgotPassword = async () => {
     if (!email.trim()) {
       Alert.alert("Email Required", "Please enter your email address first.");
@@ -141,7 +190,7 @@ export function RecoveryWizard({
         "If an account exists with this email, you'll receive a password reset link."
       );
     } catch {
-      // Generic message for anti-enumeration
+      // Same message on success/failure prevents user enumeration
       Alert.alert(
         "Check Your Email",
         "If an account exists with this email, you'll receive a password reset link."
@@ -151,6 +200,10 @@ export function RecoveryWizard({
     }
   };
 
+  /**
+   * Opens device mail client with pre-filled support request.
+   * Used when user exhausts recovery attempts and needs human support.
+   */
   const handleContactSupport = () => {
     const subject = encodeURIComponent("Subscription Recovery Help");
     const body = encodeURIComponent(
@@ -159,6 +212,10 @@ export function RecoveryWizard({
     Linking.openURL(`mailto:support@calmnest.app?subject=${subject}&body=${body}`);
   };
 
+  /**
+   * Resets wizard state and closes modal.
+   * Called when user dismisses the wizard without successful recovery.
+   */
   const handleClose = () => {
     setStep("methods");
     setEmail("");
@@ -166,6 +223,10 @@ export function RecoveryWizard({
     onClose();
   };
 
+  /**
+   * Final handler: User successfully recovered their subscription.
+   * Resets state and calls parent's onSuccess callback.
+   */
   const handleSuccess = () => {
     handleClose();
     onSuccess?.();

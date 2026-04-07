@@ -1,3 +1,30 @@
+/**
+ * ContentCard.tsx
+ *
+ * Architectural Role:
+ * Reusable card component for displaying meditation, course, or content items across the app.
+ * Supports rich metadata (thumbnails, badges, lock icons) and adapts styling based on context
+ * (sleep page vs. regular pages, light vs. dark mode). Used in grids and carousels.
+ *
+ * Design Patterns:
+ * - Conditional Theming: Switches between sleep-specific and regular theme palettes based on
+ *   the darkMode prop. This allows the same component to work on visually distinct pages.
+ * - Subscription-Aware Rendering: Shows lock badge only when content is premium and user
+ *   lacks subscription. Coordinated via useSubscription context.
+ * - Color Injection: Accepts fallbackColor (theme color or custom) and applies it as tint
+ *   to background and accent elements. Allows dynamic color-coding by content category.
+ *
+ * Key Dependencies:
+ * - AnimatedPressable: Provides tap feedback animation
+ * - SubscriptionContext: Determines if lock badge should show
+ * - ThemeContext: Access to sleep vs. regular color palettes
+ *
+ * Consumed By:
+ * - Content discovery pages (meditations, courses)
+ * - Sleep/music library pages
+ * - Featured content carousels
+ */
+
 import React from "react";
 import { View, Text, Image, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -6,6 +33,11 @@ import { useTheme } from "@core/providers/contexts/ThemeContext";
 import { useSubscription } from "@core/providers/contexts/SubscriptionContext";
 import { Theme } from "@/theme";
 
+/**
+ * Helper to convert hex color (e.g., "#FF6B6B") to rgba format with custom opacity.
+ * Used to apply subtle color tints to card backgrounds and icon containers.
+ * Example: "#FF6B6B" with 0.07 opacity → "rgba(255, 107, 107, 0.07)" (very subtle tint)
+ */
 // Helper to convert hex color to rgba with opacity
 function hexToRgba(hex: string, opacity: number): string {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -46,11 +78,24 @@ export function ContentCard({
   const { theme, isDark } = useTheme();
   const { isPremium: hasSubscription } = useSubscription();
 
+  /**
+   * Mode detection: The darkMode prop is used for the Sleep page specifically,
+   * which has a distinct visual identity. isDark is the system-wide dark mode.
+   * This allows the Sleep page to use specialized colors even in light mode,
+   * or use regular colors if the rest of the app is light but sleep page is dark.
+   */
   // darkMode prop = Sleep page (always use sleep colors)
   // isDark = system/app dark mode (use regular dark colors)
   const isSleepPage = darkMode;
   const isRegularDark = isDark && !darkMode;
 
+  /**
+   * Subscription-aware lock icon rendering. Shows a lock badge when:
+   * - Content is marked as premium (isFree === false)
+   * - AND user doesn't have an active subscription
+   *
+   * This provides clear visual feedback that the content is behind a paywall.
+   */
   // Show lock only when content is not free and user doesn't have subscription
   const showLock = isFree === false && !hasSubscription;
 
@@ -61,6 +106,16 @@ export function ContentCard({
 
   const accentColor = fallbackColor || theme.colors.primary;
 
+  /**
+   * Card background color strategy based on context:
+   * 1. Sleep page: Use dedicated sleep surface color for visual consistency
+   * 2. Regular dark mode: Use standard surface color
+   * 3. Light mode: Apply subtle tint of the accent color (7% opacity) to tie the card
+   *    to its category color without being overwhelming
+   *
+   * This creates visual hierarchy: sleep page > dark mode cards have more contrast,
+   * light mode cards are subtly color-coded by category.
+   */
   // Card background with subtle color tint
   let cardBgColor: string;
   if (isSleepPage) {

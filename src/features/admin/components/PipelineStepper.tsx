@@ -1,16 +1,31 @@
 /**
- * Visual pipeline stepper showing job execution progress.
+ * Linear pipeline stepper visualization for job execution progress.
+ *
+ * ARCHITECTURAL ROLE:
+ * Shows execution progress as sequence of pipeline steps (llm -> format -> image -> tts -> upload -> publish).
+ * Provides visual feedback on which step is active, completed, or failed.
  *
  * DESIGN PATTERN:
- * - Pipeline visualization: Linear progression of steps from pending to publishing
- * - Status indicators: Icons + colors show done/active/failed states
+ * - Pipeline visualization: Linear progression through canonical job status sequence
+ * - Status indicators: Icons + colors reveal job execution state
+ * - State-based styling: Colors and icons vary by step completion
  *
- * STATE LEGEND:
- * - Gray dot: Not yet reached
- * - Blue radio button: Currently active
- * - Green checkmark: Completed step
- * - Red X: Failed at this step (terminal)
- * - Paused: Shows as if paused on llm_generating (visual anchor point)
+ * VISUAL INDICATORS:
+ * - Gray dot: Step not yet reached (future)
+ * - Blue radio button: Currently executing on this step
+ * - Green checkmark: Step completed successfully
+ * - Red X: Failed at this step (terminal error)
+ * - Paused indicator: Paused jobs visually anchored at llm_generating step
+ *
+ * DISPLAYED STEPS:
+ * Filters out pending/completed/paused from JOB_STATUS_ORDER to show only
+ * the active pipeline stages: llm_generating -> qa_formatting -> image_generating
+ * -> tts_pending -> tts_converting -> post_processing -> uploading -> publishing
+ *
+ * USAGE EXAMPLE:
+ * ```tsx
+ * <PipelineStepper currentStatus={job.status} />
+ * ```
  */
 
 import React from 'react';

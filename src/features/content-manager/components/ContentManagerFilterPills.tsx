@@ -1,8 +1,31 @@
+/**
+ * ARCHITECTURAL ROLE:
+ * Generic, reusable filter pill component for multi-choice filters.
+ * Displays horizontal scrollable list of pill buttons; one can be selected at a time.
+ *
+ * DESIGN PATTERNS:
+ * - **Generic Component**: Parameterized over string union type T, enabling type-safe filters
+ *   without repeating component code for each filter dimension (type, access, status, etc.)
+ * - **Controlled Component**: Caller manages selectedId state; onChange callback notifies on selection change
+ *   (React best practice: single source of truth in parent state)
+ * - **Composition Over Inheritance**: Option shape is a simple { id, label } record; easy to construct
+ *   from any enum or constant map
+ *
+ * CONSUMERS:
+ * - ContentManagerScreen: type, access, thumbnail filters
+ * - ContentManagerReportsScreen: status, type, category filters
+ */
+
 import React, { useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useTheme } from '@core/providers/contexts/ThemeContext';
 import { Theme } from '@/theme';
 
+/**
+ * Single option for a pill group. Generic over string union type T for type safety.
+ * Enables exhaustiveness checking: if you define new filter values, TypeScript errors
+ * if you forget to add corresponding Option entries.
+ */
 type Option<T extends string> = {
   id: T;
   label: string;
@@ -15,6 +38,19 @@ interface Props<T extends string> {
   onChange: (value: T) => void;
 }
 
+/**
+ * Renders a horizontal scrollable group of filter pills (buttons).
+ * Exactly one pill is always selected (radio-button behavior).
+ *
+ * STYLING:
+ * - Selected pill: primary color background + white text
+ * - Unselected pill: surface color + border + muted text
+ * - Pressed state: reduced opacity for tactile feedback
+ *
+ * ACCESSIBILITY:
+ * - Each pill is a Pressable with clear touch targets
+ * - Visual feedback (selected state, pressed opacity) helps users understand what's active
+ */
 export function ContentManagerFilterPills<T extends string>({
   label,
   options,

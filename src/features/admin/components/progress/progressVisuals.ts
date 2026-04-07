@@ -1,3 +1,25 @@
+/**
+ * Visual styling utilities for progress states in course pipeline view.
+ *
+ * ARCHITECTURAL ROLE:
+ * Maps ProgressState enum to consistent visual representation (colors, icons, backgrounds).
+ * Ensures unified styling across CoursePipelineMap and WorkerSwimlanes components.
+ *
+ * DESIGN PATTERN:
+ * - State-based styling: Each state has canonical icon and color
+ * - RGBA generation: Creates semantic tints (0.05 rowTint, 0.16 iconTint, etc.)
+ * - Theme bridge: Adapts accent colors to user theme (light/dark mode support)
+ *
+ * COLOR SEMANTICS:
+ * - running (blue): Active execution
+ * - succeeded (green): Successful completion
+ * - failed (red): Terminal error state
+ * - retrying (amber): Scheduled retry
+ * - queued (orange): Waiting for dispatch
+ * - waiting (gray): Blocked/paused
+ * - cancelled (slate): Explicitly terminated
+ */
+
 import type { ComponentProps } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { Theme } from '@/theme';

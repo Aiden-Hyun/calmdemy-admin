@@ -1,28 +1,33 @@
 /**
- * Unified hook for job detail view (Master-Detail pattern).
+ * Unified hook for job detail data + actions (Facade pattern).
  *
  * ARCHITECTURAL ROLE:
  * Aggregates job data (content_job, factory_job, factory_run, timeline, workers)
- * and job actions (publish, delete, approve, regenerate) into a single interface.
- * Used by both full-screen job route and shell inspector pane.
+ * and job actions (publish, delete, approve, regenerate) into single interface.
+ * Used by both full-screen job route (/admin/job/[id]) and shell inspector pane.
  *
  * DESIGN PATTERNS:
+ * - Facade: Hide useJobDetail, useChildJobs, useJobStepTimeline, useActiveJobWorkers complexity
  * - Master-Detail: Single job ID -> load all related nested resources
- * - Command pattern: Each handler (handleRetry, handlePublish, etc.) encapsulates an action
+ * - Command pattern: Each handler (handleRetry, handlePublish, etc.) encapsulates action
  * - Derived state: Boolean flags (isAwaitingApproval, isDeletable) computed from job state
- * - Platform abstraction: Alert (native) vs confirm dialog (web)
+ * - Platform abstraction: Alert (native) vs confirm dialog (web); respect Platform.OS
  *
- * DATA SOURCES:
- * 1. useJobDetail: ContentJob + FactoryJob + FactoryJobRun
+ * DATA AGGREGATION:
+ * 1. useJobDetail: ContentJob + FactoryJob + FactoryJobRun + executionView
  * 2. useChildJobs: For full_subject jobs, track child course jobs
- * 3. useJobStepTimeline: V2 engine step execution timeline
- * 4. useActiveJobWorkers: Workers currently assigned to this job
+ * 3. useJobStepTimeline: V2 factory step execution timeline
+ * 4. useActiveJobWorkers: Workers currently executing this job
  *
- * STATE MACHINE:
- * Approval workflows are complex multi-step processes:
- * - Script approval: completed -> pending approval -> approved -> continue to TTS
+ * APPROVAL WORKFLOWS:
+ * Complex multi-step state machines:
+ * - Script approval: completed -> pending approval -> approved -> TTS
  * - Subject plan: full_subject completed -> plan approval -> launch children
- * - Course regeneration: completed -> regen request -> optional script approval -> publish approval
+ * - Course regen: completed -> regen -> optional script approval -> publish approval
+ *
+ * CONFIRMATION DIALOGS:
+ * Platform-specific: web uses confirm(), mobile skips confirmation (async Alert is awkward).
+ * Shows warnings for destructive actions (publish regen, delete subject with children).
  */
 
 import { useCallback } from 'react';

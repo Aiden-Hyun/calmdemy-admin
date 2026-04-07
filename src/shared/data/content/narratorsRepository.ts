@@ -43,8 +43,17 @@ export interface FirestoreNarrator {
   photoUrl: string;
 }
 
-// In-memory cache: name.toLowerCase() -> narrator object
-// Populated by getNarrators() or getNarratorByName() cache hit
+/**
+ * In-memory read-through cache for narrator metadata.
+ * Maps lowercase narrator names to full FirestoreNarrator objects.
+ * Cache key is lowercase to enable case-insensitive lookups.
+ * Populated lazily by getNarrators() or getNarratorByName().
+ *
+ * CACHE LIFECYCLE:
+ * - Persists for the duration of the app session
+ * - Not cleared automatically on narrator data changes
+ * - Consider invalidating on app startup or when narrator config changes
+ */
 const narratorCache: Map<string, FirestoreNarrator> = new Map();
 
 /**
@@ -67,17 +76,25 @@ const narratorCache: Map<string, FirestoreNarrator> = new Map();
  */
 export async function getNarrators(): Promise<FirestoreNarrator[]> {
   try {
-    // Fetch all narrator documents (no filter needed - small collection)
+    // Fetch all narrator documents (no filter - small collection, safe to scan)
+    // Narrators are metadata: typically 5-20 documents total
     const snapshot = await getDocs(collection(db, "narrators"));
+
+    // Map Firestore docs to typed objects, including document ID
     const narrators = snapshot.docs.map(
       (docSnapshot) =>
         ({ id: docSnapshot.id, ...docSnapshot.data() } as FirestoreNarrator)
     );
-    // Populate read-through cache with all narrators for fast lookups
+
+    // Populate read-through cache with all narrators for fast O(1) lookups
+    // Using lowercase keys for case-insensitive matching
     narrators.forEach((n) => narratorCache.set(n.name.toLowerCase(), n));
+
     return narrators;
   } catch (error) {
     console.error("Error fetching narrators:", error);
+    // Return empty array on error rather than throwing
+    // UI will render without narrator images/bios, but app remains functional
     return [];
   }
 }
@@ -108,26 +125,30 @@ export async function getNarrators(): Promise<FirestoreNarrator[]> {
 export async function getNarratorByName(
   name: string
 ): Promise<FirestoreNarrator | null> {
-  // Cache hit: return immediately without Firestore query
+  // CACHE HIT: Return immediately without Firestore query
+  // This is the fast path: O(1) Map lookup instead of collection scan
   const cached = narratorCache.get(name.toLowerCase());
   if (cached) return cached;
 
   try {
-    // Cache miss: query Firestore
+    // CACHE MISS: Query Firestore for this narrator
+    // Note: Firestore query is case-sensitive, so query uses exact name
     const q = query(collection(db, "narrators"), where("name", "==", name));
     const snapshot = await getDocs(q);
     if (snapshot.empty) return null;
 
+    // Build narrator object with Firestore doc ID
     const narrator = {
       id: snapshot.docs[0].id,
       ...snapshot.docs[0].data(),
     } as FirestoreNarrator;
 
-    // Store in cache for next lookup
+    // Store in cache for future lookups (using lowercase key)
     narratorCache.set(name.toLowerCase(), narrator);
     return narrator;
   } catch (error) {
     console.error("Error fetching narrator by name:", error);
+    // Return null on error: narrator data not available, UI renders without photo
     return null;
   }
 }

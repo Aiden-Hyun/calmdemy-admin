@@ -1,3 +1,30 @@
+/**
+ * SleepTimerPicker Component
+ *
+ * Architectural Role:
+ * Modal UI for managing meditation/sleep timers. Provides preset durations
+ * and quick extend actions. Integrates with SleepTimerContext for global
+ * timer state management.
+ *
+ * Design Patterns:
+ * - Modal Form: Bottom-sheet style selection interface
+ * - Dual-state UI: Shows different content based on timer active state
+ * - Context Integration: Uses useSleepTimer for global state
+ *
+ * Key Dependencies:
+ * - useSleepTimer: Global timer state management
+ * - useTheme: Theme styling (dark theme optimized for nighttime use)
+ *
+ * Consumed By:
+ * - Media player header (sleep timer button)
+ * - Quick-access timer in playback controls
+ *
+ * Design Notes:
+ * - Dark background (#1A1D29) is intentional for nighttime usability
+ * - Shows different UI based on timer state: selection mode vs. active mode
+ * - Extend buttons provide quick +5min and +15min actions
+ */
+
 import React, { useState, useMemo } from 'react';
 import {
   View,
@@ -18,7 +45,7 @@ interface SleepTimerPickerProps {
   onClose: () => void;
 }
 
-// Preset durations in minutes
+/** Preset durations for quick selection without custom entry */
 const PRESET_DURATIONS = [
   { label: '5 min', minutes: 5 },
   { label: '10 min', minutes: 10 },
@@ -30,31 +57,42 @@ const PRESET_DURATIONS = [
   { label: '2 hours', minutes: 120 },
 ];
 
+/**
+ * SleepTimerPicker - Dual-mode sleep timer UI
+ *
+ * Two modes:
+ * 1. No active timer: Show duration selection screen
+ * 2. Active timer: Show remaining time, extend, and cancel options
+ */
 export function SleepTimerPicker({ visible, onClose }: SleepTimerPickerProps) {
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
   const { isActive, remainingSeconds, startTimer, cancelTimer, extendTimer } = useSleepTimer();
   const [selectedMinutes, setSelectedMinutes] = useState<number | null>(null);
 
+  /** Update selection state */
   const handleSelectDuration = (minutes: number) => {
     setSelectedMinutes(minutes);
   };
 
+  /** Start timer with selected duration */
   const handleStartTimer = () => {
     if (selectedMinutes) {
-      startTimer(selectedMinutes * 60);
+      startTimer(selectedMinutes * 60); // Convert minutes to seconds
       setSelectedMinutes(null);
       onClose();
     }
   };
 
+  /** Cancel active timer */
   const handleCancelTimer = () => {
     cancelTimer();
     onClose();
   };
 
+  /** Add time to active timer */
   const handleExtend = (minutes: number) => {
-    extendTimer(minutes * 60);
+    extendTimer(minutes * 60); // Convert minutes to seconds
   };
 
   return (

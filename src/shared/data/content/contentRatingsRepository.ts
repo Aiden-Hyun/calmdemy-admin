@@ -68,6 +68,7 @@ export async function getUserRating(
 ): Promise<RatingType | null> {
   try {
     // Composite query to find existing rating (should return 0 or 1 doc)
+    // Expected: one rating per user+content pair
     const q = query(
       contentRatingsCollection,
       where("user_id", "==", userId),
@@ -79,10 +80,12 @@ export async function getUserRating(
       return null;
     }
 
-    // Return the first (and expected only) rating
+    // Return the first (and expected only) rating document
+    // If multiple exist (data corruption), just return the first one
     return snapshot.docs[0].data().rating as RatingType;
   } catch (error) {
     console.error("Error getting user rating:", error);
+    // Return null on error: assume no rating rather than throwing
     return null;
   }
 }
@@ -135,13 +138,15 @@ export async function setContentRating(
       const existingDoc = snapshot.docs[0];
       const existingRating = existingDoc.data().rating as RatingType;
 
-      // Toggle semantics: clicking same rating again removes it
+      // TOGGLE SEMANTICS: clicking same rating again removes it
+      // UX: user sees rating button toggle on/off, not replace
       if (existingRating === rating) {
         await deleteDoc(existingDoc.ref);
-        return null;
+        return null; // Signal to UI that rating is now deleted
       }
 
-      // User changed their rating from one value to another
+      // User changed rating from one value to another (e.g., like -> dislike)
+      // Update existing document rather than creating new one
       await setDoc(existingDoc.ref, {
         user_id: userId,
         content_id: contentId,
@@ -153,6 +158,7 @@ export async function setContentRating(
     }
 
     // First rating for this user+content pair
+    // Use addDoc() to allow auto-generated IDs (unlike completedContent composite keys)
     await addDoc(contentRatingsCollection, {
       user_id: userId,
       content_id: contentId,
@@ -163,6 +169,7 @@ export async function setContentRating(
     return rating;
   } catch (error) {
     console.error("Error setting content rating:", error);
+    // Return null on error: rating operation failed, UI should reflect previous state
     return null;
   }
 }
