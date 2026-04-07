@@ -59,6 +59,13 @@ export const TTS_VOICES: VoiceOption[] = [
     description: 'Clone voice from sample_voices/laura_qwen.wav',
     sampleAsset: require('../../../../sample_voices/laura_qwen.wav'),
   },
+  {
+    id: 'daniel_16s',
+    label: 'Daniel',
+    ttsModel: 'qwen3-base',
+    description: 'Clone voice from sample_voices/daniel_16s.wav',
+    sampleAsset: require('../../../../sample_voices/daniel_16s.wav'),
+  },
 ];
 
 // ==================== HELPERS ====================
