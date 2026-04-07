@@ -1,3 +1,34 @@
+/**
+ * ============================================================
+ * AccountSwitchWarning.tsx — Account Switch Warning Modal
+ * (Presentational Modal, Loading Guard Pattern)
+ * ============================================================
+ *
+ * Architectural Role:
+ *   This modal is the final checkpoint before an account switch is executed.
+ *   It warns users about data loss (favorites, history, preferences) and
+ *   ensures they understand the consequences. It's part of the multi-modal
+ *   flow orchestrated by AccountPromptModal, serving as the last gate before
+ *   executing the actual account switch action.
+ *
+ * Design Patterns:
+ *   - Presentational Component: Renders a warning and two buttons; the parent
+ *     controls visibility and handles the result of onConfirmSwitch.
+ *   - Loading Guard: Uses isLoading to prevent double-clicks during async
+ *     operation and to disable the cancel button during submission.
+ *   - Simple State Machine: Two states — ready (isLoading=false) and
+ *     in-progress (isLoading=true). No complex transitions.
+ *
+ * Consumed By:
+ *   AccountPromptModal or similar account management flows that need a
+ *   confirmation checkpoint before switching accounts.
+ *
+ * Key Dependencies:
+ *   - useTheme: Provides warning colors and typography
+ *   - useSafeAreaInsets: Respects notches and safe areas
+ * ============================================================
+ */
+
 import React, { useMemo, useState } from "react";
 import {
   View,
@@ -18,6 +49,14 @@ interface AccountSwitchWarningProps {
   onConfirmSwitch: () => Promise<void>;
 }
 
+/**
+ * AccountSwitchWarning — Final Confirmation Before Account Switch
+ *
+ * This is the last step in the account switch flow: the user has already
+ * selected which account to switch to, and now they confirm the final warning
+ * about data loss. The parent handles the actual auth state change after
+ * onConfirmSwitch resolves.
+ */
 export function AccountSwitchWarning({
   visible,
   onClose,
@@ -26,8 +65,17 @@ export function AccountSwitchWarning({
   const { theme, isDark } = useTheme();
   const insets = useSafeAreaInsets();
   const styles = useMemo(() => createStyles(theme, isDark), [theme, isDark]);
+  // isLoading prevents double-clicks and disables buttons during the async operation
   const [isLoading, setIsLoading] = useState(false);
 
+  /**
+   * Handler: Calls the parent's onConfirmSwitch callback (which performs the
+   * actual account switch), then closes the modal if successful. The finally
+   * block ensures isLoading is always cleared, even if the operation fails.
+   *
+   * Note: Errors are caught and logged but don't prevent the modal from closing.
+   * The parent is responsible for displaying error alerts to the user.
+   */
   const handleConfirm = async () => {
     setIsLoading(true);
     try {
@@ -35,6 +83,7 @@ export function AccountSwitchWarning({
       onClose();
     } catch (error) {
       console.error("Error switching accounts:", error);
+      // Error is logged but not re-thrown; the parent handles error display
     } finally {
       setIsLoading(false);
     }
@@ -49,7 +98,7 @@ export function AccountSwitchWarning({
     >
       <View style={styles.overlay}>
         <View style={[styles.container, { paddingBottom: insets.bottom + 24 }]}>
-          {/* Warning Icon */}
+          {/* Warning icon: signals this is a destructive operation */}
           <View style={styles.iconContainer}>
             <Ionicons
               name="warning-outline"
@@ -58,16 +107,15 @@ export function AccountSwitchWarning({
             />
           </View>
 
-          {/* Title */}
           <Text style={styles.title}>Switch Accounts?</Text>
 
-          {/* Description */}
+          {/* Main warning: explains the consequence of switching */}
           <Text style={styles.description}>
             If you switch accounts, you may not see data from your current
             account unless it's backed up or synced.
           </Text>
 
-          {/* Warning note */}
+          {/* Informational callout: clarifies which data is affected */}
           <View style={styles.warningNote}>
             <Ionicons
               name="information-circle-outline"
@@ -80,7 +128,7 @@ export function AccountSwitchWarning({
             </Text>
           </View>
 
-          {/* Switch Account button */}
+          {/* Primary action: destructive (warning color), disabled during async operation */}
           <Pressable
             style={({ pressed }) => [
               styles.primaryButton,
@@ -97,7 +145,7 @@ export function AccountSwitchWarning({
             )}
           </Pressable>
 
-          {/* Cancel button */}
+          {/* Secondary action: cancel / go back */}
           <Pressable
             style={({ pressed }) => [
               styles.cancelButton,

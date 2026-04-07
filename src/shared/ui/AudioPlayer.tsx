@@ -1,3 +1,49 @@
+/**
+ * ============================================================
+ * AudioPlayer.tsx — Reusable Audio Player Component
+ * (Controlled Component, State Composition, Feature Toggles)
+ * ============================================================
+ *
+ * Architectural Role:
+ *   This is a presentation-only audio player UI component. It's fully
+ *   controlled by props — no internal audio playback logic. All audio
+ *   state (isPlaying, position, duration) and callbacks (onPlay, onPause,
+ *   onSeek) are passed down from a parent ViewModel or custom hook that
+ *   manages the actual audio engine (e.g., react-native-sound, expo-av).
+ *
+ *   The component coordinates multiple UI elements: progress slider, play
+ *   button, skip buttons, loop toggle, and speed picker modal. It's highly
+ *   composable through feature toggles.
+ *
+ * Design Patterns:
+ *   - Controlled Component: All state comes from props; this component is
+ *     purely a view layer. The parent controls what plays, when, and at what speed.
+ *   - Feature Toggles: showSpeedControl, showLoopControl, showSkipControls
+ *     allow callers to customize which controls appear (e.g., basic player
+ *     without speed, or full-featured player with all controls).
+ *   - Modal Composition: Speed picker is a child modal managed via internal
+ *     state (showSpeedPicker). The parent doesn't control this modal; it's
+ *     UI state that doesn't affect the audio itself.
+ *   - Derived State: tempSpeed is a temporary state used only for the modal
+ *     interaction. It's synced with playbackRate when the modal opens, then
+ *     confirmed or discarded when the modal closes.
+ *
+ * Props Structure:
+ *   - Playback state: isPlaying, isLoading, duration, position
+ *   - Formatted time: formattedPosition, formattedDuration (string MM:SS)
+ *   - Callbacks: onPlay, onPause, onSeek, onPlaybackRateChange, etc.
+ *   - Optional feature toggles and configuration
+ *
+ * Consumed By:
+ *   Meditation screens, podcast/audio feature screens that need a
+ *   standard playback UI without building custom controls.
+ *
+ * Key Dependencies:
+ *   - @react-native-community/slider: drag-to-seek progress bar
+ *   - useTheme: styling context
+ * ============================================================
+ */
+
 import React, { useMemo, useState } from 'react';
 import {
   View,
@@ -13,7 +59,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@core/providers/contexts/ThemeContext';
 import { Theme } from '@/theme';
 
-// Speed range
+// --- Constants: Speed control range ---
+// These limits define the min/max playback speeds available to users.
+// Typical range: 0.5x (half speed, slow) to 2.0x (double speed, fast)
 const MIN_SPEED = 0.5;
 const MAX_SPEED = 2.0;
 
@@ -43,6 +91,20 @@ interface AudioPlayerProps {
   showSkipControls?: boolean;
 }
 
+/**
+ * AudioPlayer — Fully Controlled Audio Playback UI
+ *
+ * This is a presentation component: it renders audio controls and accepts
+ * callbacks, but never manages the audio itself. The parent component (a
+ * ViewModel or custom hook) drives all playback state.
+ *
+ * Feature toggles (showSpeedControl, showLoopControl, showSkipControls) allow
+ * the parent to customize which controls appear, enabling reuse in different
+ * contexts (simple vs. full-featured players).
+ *
+ * The speed picker modal is the only exception to "controlled" — its visibility
+ * is managed internally because it's pure UI state that doesn't affect audio.
+ */
 export function AudioPlayer({
   isPlaying,
   isLoading,
@@ -66,28 +128,53 @@ export function AudioPlayer({
   showSkipControls = true,
 }: AudioPlayerProps) {
   const { theme } = useTheme();
+  // Memoize the StyleSheet to avoid recalculation on every render
   const styles = useMemo(() => createStyles(theme), [theme]);
-  const [showSpeedPicker, setShowSpeedPicker] = useState(false);
 
+  // --- Speed Picker Modal State ---
+  // These two state variables manage the speed picker UI:
+  // - showSpeedPicker: controls modal visibility
+  // - tempSpeed: temporary state during slider interaction (synced with playbackRate on open)
+  const [showSpeedPicker, setShowSpeedPicker] = useState(false);
   const [tempSpeed, setTempSpeed] = useState(playbackRate);
 
+  /**
+   * Handler: Updates tempSpeed as user drags the speed slider in the modal.
+   * Rounds to nearest 0.1 for clean, readable values (0.5, 0.6, ..., 1.9, 2.0).
+   *
+   * The rounding prevents floating-point noise from the slider (e.g., 1.2500000001).
+   */
   const handleSpeedChange = (value: number) => {
-    // Round to nearest 0.1
+    // Round to nearest 0.1 for clean values
     const rounded = Math.round(value * 10) / 10;
     setTempSpeed(rounded);
   };
 
+  /**
+   * Handler: Confirms the speed selection and closes the modal.
+   * Calls the parent's onPlaybackRateChange callback with the final tempSpeed value.
+   */
   const handleSpeedConfirm = () => {
     onPlaybackRateChange?.(tempSpeed);
     setShowSpeedPicker(false);
   };
 
+  /**
+   * Handler: Resets the speed to 1.0x and closes the modal.
+   * Calls the parent's onPlaybackRateChange with 1.0.
+   */
   const handleResetSpeed = () => {
     setTempSpeed(1.0);
     onPlaybackRateChange?.(1.0);
   };
 
-  // Sync temp speed when modal opens
+  /**
+   * Handler: Opens the speed picker modal and syncs tempSpeed with the current playbackRate.
+   * This ensures the slider starts at the current playback speed, not a stale tempSpeed value.
+   *
+   * This pattern (sync on open) prevents UI bugs where the slider shows the wrong position
+   * if the user opened the modal, closed it without confirming, and then opened it again.
+   */
   const handleOpenSpeedPicker = () => {
     setTempSpeed(playbackRate);
     setShowSpeedPicker(true);
@@ -95,6 +182,7 @@ export function AudioPlayer({
 
   return (
     <View style={styles.container}>
+      {/* --- Optional Title/Subtitle Section --- */}
       {(title || subtitle) && (
         <View style={styles.infoContainer}>
           {title && <Text style={styles.title}>{title}</Text>}
@@ -102,9 +190,11 @@ export function AudioPlayer({
         </View>
       )}
 
-      {/* Progress Bar */}
+      {/* --- Progress Bar with Time Display --- */}
       <View style={styles.progressContainer}>
         <Text style={styles.timeText}>{formattedPosition}</Text>
+        {/* Slider: accepts a numeric position (0 to duration) and calls onSeek on drag end.
+            Disabled when loading or duration is 0 (prevents seeking in invalid states). */}
         <Slider
           style={styles.slider}
           value={position}
@@ -119,7 +209,7 @@ export function AudioPlayer({
         <Text style={styles.timeText}>{formattedDuration}</Text>
       </View>
 
-      {/* Large Play Button */}
+      {/* --- Large Play/Pause Button --- */}
       <View style={styles.playButtonContainer}>
         <TouchableOpacity
           style={styles.playButton}
@@ -127,6 +217,8 @@ export function AudioPlayer({
           disabled={isLoading}
           activeOpacity={0.8}
         >
+          {/* Conditional rendering: show spinner while loading, icon otherwise.
+              The icon changes based on isPlaying (play ↔ pause toggle). */}
           {isLoading ? (
             <ActivityIndicator color="white" size="large" />
           ) : (
@@ -134,15 +226,18 @@ export function AudioPlayer({
               name={isPlaying ? 'pause' : 'play'}
               size={44}
               color="white"
+              // Visual tweak: offset play icon slightly right for optical balance
               style={isPlaying ? {} : { marginLeft: 6 }}
             />
           )}
         </TouchableOpacity>
       </View>
 
-      {/* Secondary Controls Row */}
+      {/* --- Secondary Controls Row (Loop, Skip, Speed) --- */}
       <View style={styles.secondaryControls}>
-        {/* Loop Button */}
+        {/* Feature Toggle: Loop Control */}
+        {/* This button is only rendered if showLoopControl=true AND onToggleLoop is provided.
+            This is the Feature Toggle pattern — allows callers to customize the UI. */}
         {showLoopControl && onToggleLoop && (
           <TouchableOpacity
             style={styles.controlButton}
@@ -154,13 +249,15 @@ export function AudioPlayer({
             <Ionicons
               name="repeat"
               size={22}
+              // Color changes based on state: bright white when looping, muted when off
               color={isLooping ? 'white' : 'rgba(255,255,255,0.5)'}
             />
+            {/* Active indicator dot: visual feedback that loop is on */}
             {isLooping && <View style={styles.activeIndicator} />}
           </TouchableOpacity>
         )}
 
-        {/* Skip Back 15s */}
+        {/* Feature Toggle: Skip Back Button (skip -15 seconds) */}
         {showSkipControls && onSkipBack && (
           <TouchableOpacity
             style={styles.skipButton}
@@ -173,7 +270,7 @@ export function AudioPlayer({
           </TouchableOpacity>
         )}
 
-        {/* Skip Forward 15s */}
+        {/* Feature Toggle: Skip Forward Button (skip +15 seconds) */}
         {showSkipControls && onSkipForward && (
           <TouchableOpacity
             style={styles.skipButton}
@@ -186,7 +283,9 @@ export function AudioPlayer({
           </TouchableOpacity>
         )}
 
-        {/* Speed Button */}
+        {/* Feature Toggle: Speed Control Button */}
+        {/* Opens the speed picker modal. The button shows current speed (1x, 1.5x, etc.)
+            and highlights when speed is not 1.0x. */}
         {showSpeedControl && onPlaybackRateChange && (
           <TouchableOpacity
             style={styles.speedButton}
@@ -195,37 +294,44 @@ export function AudioPlayer({
             activeOpacity={0.7}
             accessibilityLabel={`Playback speed ${playbackRate}x`}
           >
+            {/* Conditional styling: emphasize non-normal speeds */}
             <Text style={[styles.speedText, playbackRate !== 1.0 && styles.speedTextActive]}>
               {playbackRate === 1.0 ? '1x' : `${playbackRate.toFixed(1)}x`}
             </Text>
+            {/* Active indicator: shown when speed is not 1.0x */}
             {playbackRate !== 1.0 && <View style={styles.activeIndicator} />}
           </TouchableOpacity>
         )}
       </View>
 
-      {/* Speed Picker Modal */}
+      {/* --- Speed Picker Modal --- */}
+      {/* This modal is managed internally because it's UI state, not audio state.
+          Modal Composition pattern: a child modal within the player. */}
       <Modal
         visible={showSpeedPicker}
         transparent
         animationType="fade"
         onRequestClose={() => setShowSpeedPicker(false)}
       >
+        {/* Overlay Pressable: tapping outside the picker closes the modal (UX pattern) */}
         <Pressable
           style={styles.modalOverlay}
           onPress={() => setShowSpeedPicker(false)}
         >
+          {/* Inner Pressable: stops propagation so taps on the picker don't close the modal */}
           <Pressable style={styles.speedPickerContainer} onPress={(e) => e.stopPropagation()}>
             <Text style={styles.speedPickerTitle}>Playback Speed</Text>
-            
-            {/* Current Speed Display */}
+
+            {/* Current speed display: large, prominent number showing the temp speed */}
             <View style={styles.speedDisplayContainer}>
               <Text style={styles.speedDisplayValue}>{tempSpeed.toFixed(1)}x</Text>
+              {/* "Normal" label appears only when speed is exactly 1.0x */}
               {tempSpeed === 1.0 && (
                 <Text style={styles.speedDisplayLabel}>Normal</Text>
               )}
             </View>
 
-            {/* Slider */}
+            {/* Speed slider: drag to adjust tempSpeed between MIN_SPEED and MAX_SPEED */}
             <View style={styles.speedSliderContainer}>
               <Text style={styles.speedSliderLabel}>{MIN_SPEED}x</Text>
               <Slider
@@ -242,7 +348,7 @@ export function AudioPlayer({
               <Text style={styles.speedSliderLabel}>{MAX_SPEED}x</Text>
             </View>
 
-            {/* Actions */}
+            {/* Action buttons: Reset to 1x or Confirm the selected speed */}
             <View style={styles.speedActions}>
               <TouchableOpacity
                 style={styles.speedResetButton}

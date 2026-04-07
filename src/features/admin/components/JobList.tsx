@@ -1,3 +1,21 @@
+/**
+ * Job list view with hierarchical grouping and pagination.
+ *
+ * ARCHITECTURAL ROLE:
+ * Master view in Master-Detail pattern. Renders FlatList of JobCard components
+ * with smart parent-child grouping for full_subject jobs.
+ *
+ * DESIGN PATTERNS:
+ * - FlatList virtualization: Efficient rendering of large job lists
+ * - Hierarchical grouping: Full subject jobs expanded to show child courses
+ * - Loading/empty states: ActivityIndicator for loading, onboarding for empty
+ *
+ * GROUPING LOGIC:
+ * buildJobGroups() nests course jobs under their parent full_subject job.
+ * This creates visual hierarchy while maintaining single-list flat structure.
+ * Child jobs indented with left border for visual distinction.
+ */
+
 import React, { useMemo } from 'react';
 import {
   View,
@@ -127,6 +145,17 @@ export function JobList({
   );
 }
 
+/**
+ * Group jobs hierarchically: full_subject parent -> course children.
+ *
+ * ALGORITHM:
+ * 1. Index all jobs by ID for O(1) parent lookup
+ * 2. Iterate jobs; if job.parentJobId points to a full_subject, nest it
+ * 3. Otherwise, create top-level group with empty children array
+ * 4. In final pass, populate children for each parent
+ *
+ * INVARIANT: All jobs appear exactly once (either top-level or nested)
+ */
 function buildJobGroups(jobs: ContentJob[]): JobGroup[] {
   const jobsById = new Map(jobs.map((job) => [job.id, job]));
   const childJobsByParentId = new Map<string, ContentJob[]>();

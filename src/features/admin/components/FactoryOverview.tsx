@@ -1,3 +1,23 @@
+/**
+ * Factory overview & worker control dashboard.
+ *
+ * ARCHITECTURAL ROLE:
+ * Shows system-wide metrics (pending, active, completed) and worker control panel.
+ * Allows admin to start/stop/restart local worker and configure auto-mode.
+ *
+ * KEY SECTIONS:
+ * 1. Stats: Job queue counts (pending, active, paused, completed)
+ * 2. Local Worker: Heartbeat status (online/stale/offline) + control buttons
+ * 3. Stacks: Worker stack status (role, TTS models, pid, log path)
+ * 4. Controls: Auto-mode toggle, start/stop buttons, idle timeout, restart
+ *
+ * WORKER STATE MACHINE:
+ * - Auto mode: Worker starts on pending jobs, stops after idle timeout
+ * - Manual: Start Now / Stop Now buttons directly control worker
+ * - Optimistic UI: Local state tracks pending actions (start_clicked, stop_clicked)
+ * - Heartbeat: Worker updates lastHeartbeat; stale detection via age > 2x poll interval
+ */
+
 import React, { useMemo, useState } from 'react';
 import {
   View,

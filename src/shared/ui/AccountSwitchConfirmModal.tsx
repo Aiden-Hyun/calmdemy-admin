@@ -1,3 +1,40 @@
+/**
+ * ============================================================
+ * AccountSwitchConfirmModal.tsx — Account Switch Confirmation
+ * (Presentational Modal, Discriminated Union Pattern)
+ * ============================================================
+ *
+ * Architectural Role:
+ *   This is a pure, uncontrolled presentational modal that displays a
+ *   destructive confirmation dialog before switching from the current
+ *   (guest) account to an existing account. It's a critical Gatekeeper
+ *   that prevents accidental loss of the guest account and its subscription.
+ *
+ * Design Patterns:
+ *   - Presentational Component: All logic is in the parent; this modal is
+ *     fully driven by props and callbacks. It has no knowledge of why the
+ *     user is switching or what happens after confirmation.
+ *   - Uncontrolled Component: The parent controls visibility and handles
+ *     the async onConfirm callback; this component only manages local
+ *     loading state during the async operation.
+ *   - Discriminated Union (providerType): Uses a string literal union
+ *     ("google.com" | "apple.com" | "password") to represent which OAuth
+ *     provider the target account uses. The getProviderDisplayName helper
+ *     maps these discriminated values to user-facing strings.
+ *   - Loading State Pattern: isLoading flag prevents double-clicks and
+ *     shows spinner feedback while the async operation is in flight.
+ *
+ * Consumed By:
+ *   Parent account management flows that handle credential collisions.
+ *   The onConfirm callback typically signs in to the other account and
+ *   transfers the current session state to it.
+ *
+ * Key Dependencies:
+ *   - useTheme: Provides warning colors and theming for this destructive action
+ *   - useSafeAreaInsets: Ensures the modal respects notches and safe areas
+ * ============================================================
+ */
+
 import React, { useMemo, useState } from "react";
 import {
   View,
@@ -20,6 +57,16 @@ interface AccountSwitchConfirmModalProps {
   onCancel: () => void;
 }
 
+/**
+ * Helper function: Maps Firebase provider type strings to user-friendly display names.
+ *
+ * This is a simple Discriminated Union pattern: the function accepts a specific
+ * set of string literals and returns a corresponding display name. TypeScript
+ * ensures at compile time that only valid provider types are passed.
+ *
+ * @param providerType - Firebase auth provider identifier (e.g., "google.com")
+ * @returns User-friendly display name ("Google", "Apple", etc.)
+ */
 const getProviderDisplayName = (
   providerType: "google.com" | "apple.com" | "password"
 ): string => {
@@ -35,6 +82,16 @@ const getProviderDisplayName = (
   }
 };
 
+/**
+ * AccountSwitchConfirmModal — Destructive Account Switch Confirmation
+ *
+ * This modal is intentionally simple: it displays the email/account the user
+ * will switch to, warns them about the consequences, and lets them confirm
+ * or cancel. The parent component handles all side effects (auth state changes).
+ *
+ * The isLoading flag prevents double-submits while the async onConfirm is
+ * in flight — a common pattern for destructive operations.
+ */
 export function AccountSwitchConfirmModal({
   visible,
   email,
@@ -47,9 +104,19 @@ export function AccountSwitchConfirmModal({
   const styles = useMemo(() => createStyles(theme, isDark), [theme, isDark]);
   const [isLoading, setIsLoading] = useState(false);
 
+  // Derived state: convert provider type to display name and build the account label
   const providerName = getProviderDisplayName(providerType);
   const displayAccount = email || `this ${providerName} account`;
 
+  /**
+   * Async handler: guards against double-clicks by setting isLoading to true,
+   * calls the parent's onConfirm callback, and ensures isLoading is cleared
+   * (even if onConfirm rejects).
+   *
+   * This pattern is called the "Loading Guard" — it's essential for destructive
+   * operations to prevent race conditions where the user clicks twice before
+   * the first request completes.
+   */
   const handleConfirm = async () => {
     setIsLoading(true);
     try {
@@ -68,7 +135,8 @@ export function AccountSwitchConfirmModal({
     >
       <View style={styles.overlay}>
         <View style={[styles.container, { paddingBottom: insets.bottom + 24 }]}>
-          {/* Warning Icon */}
+          {/* Warning icon with background: uses theme.colors.warning to signal
+              this is a destructive operation */}
           <View style={styles.iconContainer}>
             <Ionicons
               name="swap-horizontal-outline"
@@ -77,16 +145,18 @@ export function AccountSwitchConfirmModal({
             />
           </View>
 
-          {/* Title */}
           <Text style={styles.title}>Switch Account?</Text>
 
-          {/* Description */}
+          {/* Description: embeds the email in a Text component with
+              emailHighlight style to visually emphasize which account
+              the user will switch to. This improves clarity for destructive ops. */}
           <Text style={styles.description}>
             Sign in to{" "}
             <Text style={styles.emailHighlight}>{displayAccount}</Text>?
           </Text>
 
-          {/* Warning note */}
+          {/* Warning callout: explains the critical consequence — the subscription
+              does NOT transfer. This is essential UX for a destructive action. */}
           <View style={styles.warningNote}>
             <Ionicons
               name="warning-outline"
@@ -99,7 +169,8 @@ export function AccountSwitchConfirmModal({
             </Text>
           </View>
 
-          {/* Switch Account button */}
+          {/* Primary action: colored in warning color to emphasize destructiveness.
+              Disabled while isLoading to prevent double-clicks. */}
           <Pressable
             style={({ pressed }) => [
               styles.primaryButton,
@@ -116,7 +187,7 @@ export function AccountSwitchConfirmModal({
             )}
           </Pressable>
 
-          {/* Cancel button */}
+          {/* Escape hatch: secondary button to cancel without side effects */}
           <Pressable
             style={({ pressed }) => [
               styles.cancelButton,

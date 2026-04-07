@@ -1,3 +1,23 @@
+/**
+ * Collapsible container for form sections (e.g., job params, scheduling).
+ *
+ * DESIGN PATTERN:
+ * - Accordion: Expands to show content; collapses to show summary chips only
+ * - Summary display: When collapsed, shows key value pairs (e.g., Duration: 10m)
+ *
+ * USAGE:
+ * ```tsx
+ * <CollapsibleSection
+ *   title="Course Configuration"
+ *   summaryItems={[{ label: 'Courses', value: '9' }]}
+ *   expanded={expandedSections.course}
+ *   onToggle={() => toggleSection('course')}
+ * >
+ *   {/* form controls */}
+ * </CollapsibleSection>
+ * ```
+ */
+
 import React from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,6 +37,10 @@ interface CollapsibleSectionProps {
   children: React.ReactNode;
 }
 
+/**
+ * Render collapsible section with optional summary chips.
+ * When collapsed, displays title + summary items to preview section contents.
+ */
 export function CollapsibleSection({
   title,
   summaryItems = [],

@@ -1,3 +1,32 @@
+/**
+ * ARCHITECTURAL ROLE:
+ * Data access layer implementing the Repository Pattern. This module aggregates data from multiple feature
+ * repositories (meditate, music, sleep) and normalizes heterogeneous data sources into uniform
+ * ContentManagerItemSummary/ContentManagerItemDetail structures. Acts as a Facade over domain repositories.
+ *
+ * DESIGN PATTERNS:
+ * - **Repository Pattern**: Abstracts data access logic; callers don't know about underlying Firestore queries
+ *   or which feature repository owns each collection.
+ * - **Adapter/Normalizer Pattern**: withCommonSummaryFields() and normalize*Summary/Detail() functions adapt
+ *   domain-specific Firestore types into the admin-facing ContentManager types. Decouples product code from
+ *   admin UI changes.
+ * - **Facade Pattern**: getContentManagerItems() and getContentManagerItemDetail() provide single entry points
+ *   that hide the complexity of orchestrating 15+ data sources.
+ * - **Safe Default Pattern**: safeGet() wraps repository calls in try-catch, returning empty arrays on failure
+ *   to prevent cascading errors if one collection is unavailable.
+ * - **Memoization/Lookup Table**: coursesById Map optimizes O(n) lookups when enriching course sessions.
+ *
+ * KEY OPERATIONS:
+ * - getContentManagerItems(): Parallel load all collections, aggregate into flat list, preserve sort order.
+ * - getContentManagerItemDetail(): Switch on collection type, fetch deep detail with metadata, relations, edit config.
+ * - Normalization: Handles snake_case ↔ camelCase mapping, null/undefined coalescing, duration fallbacks.
+ *
+ * CONSUMERS:
+ * - useContentManagerCatalog hook for listing/filtering
+ * - useContentManagerDetail hook for detail view with edit capability
+ * - Search and filter modules that operate on normalized summaries
+ */
+
 import {
   FirestoreCourse,
   FirestoreCourseSession,
@@ -52,6 +81,15 @@ import {
   ContentPreviewRoute,
 } from '../types';
 
+/**
+ * Higher-order normalizer function. Applies consistent transformation logic across all content types
+ * by filling in default values (typeLabel lookup, fallback title to id, etc.). This reduces boilerplate
+ * in collection-specific normalizers and centralizes UI presentation logic.
+ *
+ * @param collection - The content type being normalized (e.g., 'guided_meditations')
+ * @param item - Source object with optional fields; adapter accepts partial shapes
+ * @returns Normalized ContentManagerItemSummary with all required fields populated
+ */
 function withCommonSummaryFields(
   collection: ContentManagerCollection,
   item: {
@@ -69,9 +107,9 @@ function withCommonSummaryFields(
     id: item.id,
     collection,
     typeLabel: CONTENT_MANAGER_COLLECTION_LABELS[collection],
-    title: item.title || item.id,
+    title: item.title || item.id, // Fallback to ID if title missing
     description: item.description,
-    identifier: item.code || item.id,
+    identifier: item.code || item.id, // UI displays code (e.g., course_code) first, falls back to ID
     code: item.code,
     access: item.access,
     durationMinutes: item.durationMinutes,
@@ -80,11 +118,28 @@ function withCommonSummaryFields(
   };
 }
 
+/**
+ * Cleans and validates raw field values for display. Converts null/undefined/empty strings to null,
+ * used to prevent rendering empty metadata rows.
+ *
+ * @param value - Any value (potentially undefined, null, or whitespace)
+ * @returns Non-empty string or null; null indicates "don't render"
+ */
 function cleanValue(value: unknown): string | null {
   const text = String(value ?? '').trim();
   return text ? text : null;
 }
 
+/**
+ * Filters and normalizes an array of metadata field definitions for display in detail view.
+ * Removes fields with empty values (null/undefined/whitespace), preserving order.
+ *
+ * Used in detail normalization to construct the metadata array shown in ContentManagerDetailScreen,
+ * keeping the detail view clean by hiding optional fields that aren't populated.
+ *
+ * @param fields - Array of field definitions with potentially null/empty values
+ * @returns Filtered array with only non-empty fields, values cleaned and trimmed
+ */
 function appendMetadata(
   fields: Array<{ label: string; value: unknown; monospace?: boolean }>
 ) {
@@ -454,6 +509,14 @@ export function normalizeMeditationProgramSummary(
 
 // ==================== FETCH ALL ====================
 
+/**
+ * Safe wrapper for optional repository calls. Some feature repositories may throw if their
+ * Firestore collections don't exist (e.g., new features not yet deployed). Returns empty array
+ * rather than propagating errors, allowing content manager to load even if certain collections fail.
+ *
+ * @param fn - Async function that returns a Promise of array
+ * @returns Array result or empty array on error
+ */
 async function safeGet<T>(fn: () => Promise<T[]>): Promise<T[]> {
   try {
     return await fn();
@@ -462,6 +525,29 @@ async function safeGet<T>(fn: () => Promise<T[]>): Promise<T[]> {
   }
 }
 
+/**
+ * Loads ALL content items across all 15 collections and returns a unified flat array.
+ * This is the primary "list all items" operation used by the catalog view.
+ *
+ * ARCHITECTURE:
+ * - Uses Promise.all() to fetch all collections in parallel for performance.
+ * - safeGet() wraps optional collections that may not exist yet.
+ * - Builds coursesById lookup table to enrich course sessions with parent course metadata.
+ * - Applies collection-specific normalizers (map functions) to transform domain types → admin types.
+ * - Returns concatenated arrays, preserving order (meditations → courses → albums → etc.).
+ *
+ * PERFORMANCE CONSIDERATIONS:
+ * - Network: 15 parallel requests (not sequential)
+ * - Memory: All items loaded into memory (no pagination in this operation)
+ * - Caching: Caller (useContentManagerCatalog hook) should cache results and only refresh on explicit action
+ *
+ * FAILURE MODES:
+ * - If core collections fail (meditations, courses), error propagates
+ * - If optional collections fail (albums, breathing), they silently return empty arrays
+ * - Partial load is acceptable; admin can still use the partial catalog
+ *
+ * @returns Promise resolving to flat array of all content summaries across all collections
+ */
 export async function getContentManagerItems(): Promise<ContentManagerItemSummary[]> {
   const [
     meditations,
@@ -497,6 +583,7 @@ export async function getContentManagerItems(): Promise<ContentManagerItemSummar
     safeGet(getPrograms),
   ]);
 
+  // Optimization: Build lookup table for O(1) parent course enrichment during normalization
   const coursesById = new Map(courses.map((course) => [course.id, course]));
 
   return [
@@ -520,6 +607,35 @@ export async function getContentManagerItems(): Promise<ContentManagerItemSummar
   ];
 }
 
+/**
+ * Loads full detail for a single content item: metadata, relations, editable fields, and audit trail.
+ * This is the entry point for the detail view, providing all information needed for display and edit.
+ *
+ * ARCHITECTURE:
+ * - Implements Command Pattern with a switch statement dispatching on collection type.
+ * - Each case fetches via collection-specific getById() from the feature repository.
+ * - Uses detail-specific normalizer functions that add metadata arrays and edit field definitions.
+ * - Returns null if item not found (consumed by detail screen to show "not found" message).
+ *
+ * METADATA ENRICHMENT:
+ * - appendMetadata() filters and cleanses raw field values for display
+ * - Handles collection-specific metadata (e.g., instructor for sleep meditations, narrator for stories)
+ * - Monospace flag used to render code-like values (IDs, paths) in fixed-width fonts
+ *
+ * RELATIONS:
+ * - Built from parent-child references in domain data (e.g., course sessions → parent course)
+ * - Enables navigation; admin can click to jump to related items
+ * - Used in repair workflows to identify affected content
+ *
+ * EDITABLE FIELDS:
+ * - Retrieved from contentManagerEditConfig based on collection type
+ * - Defines form schema: required fields, input type, validation rules, dropdown options
+ * - Supports MVVM pattern: editableValues are model state, form transforms them → ContentManagerEditFormValues
+ *
+ * @param collection - The collection to fetch from (e.g., 'courses', 'guided_meditations')
+ * @param id - The document ID to retrieve
+ * @returns Fully enriched detail object or null if not found
+ */
 export async function getContentManagerItemDetail(
   collection: ContentManagerCollection,
   id: string

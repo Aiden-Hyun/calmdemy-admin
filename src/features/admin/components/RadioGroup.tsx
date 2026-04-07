@@ -1,3 +1,26 @@
+/**
+ * Radio button group with optional audio preview (inline layout).
+ *
+ * DESIGN PATTERNS:
+ * - Radio semantics: Single choice, mutually exclusive
+ * - Audio preview: Each option can have sample asset or URL for preview
+ * - Inline layout: Unlike Dropdown, options always visible (suitable for small lists)
+ *
+ * USAGE (e.g., for TTS voice selection):
+ * ```tsx
+ * <RadioGroup
+ *   options={voices}
+ *   selectedId={selectedVoiceId}
+ *   onSelect={(id) => setSelectedVoiceId(id)}
+ * />
+ * ```
+ *
+ * DIFFERENCES FROM DROPDOWN:
+ * - RadioGroup is always expanded (no modal)
+ * - Better for 3-5 options; Dropdown better for longer lists
+ * - Each option has play/pause button visible
+ */
+
 import React, { useMemo, useState, useEffect } from 'react';
 import { View, Text, Pressable, StyleSheet, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -19,6 +42,10 @@ interface RadioGroupProps {
   onSelect: (id: string) => void;
 }
 
+/**
+ * Render radio button group with optional audio preview on each option.
+ * Cleanup audio resources on unmount.
+ */
 export function RadioGroup({ options, selectedId, onSelect }: RadioGroupProps) {
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
@@ -27,6 +54,10 @@ export function RadioGroup({ options, selectedId, onSelect }: RadioGroupProps) {
   const [previewLoadingId, setPreviewLoadingId] = useState<string | null>(null);
   const previewPlayer = useAudioPlayer();
 
+  /**
+   * Play/pause/load audio preview for an option.
+   * Supports both sampleAsset (local require()) and sampleUrl (remote).
+   */
   const handlePreview = async (option: RadioOption) => {
     const source = option.sampleAsset ?? option.sampleUrl;
     if (!source) return;
@@ -56,6 +87,7 @@ export function RadioGroup({ options, selectedId, onSelect }: RadioGroupProps) {
     }
   };
 
+  /** Cleanup audio resources on unmount. */
   useEffect(() => {
     return () => {
       previewPlayer.stop();

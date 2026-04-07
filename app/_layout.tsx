@@ -62,122 +62,22 @@ function RootNavigator() {
 
   return (
     <Stack screenOptions={screenOptions}>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen 
-          name="login" 
-          options={{ 
-            title: 'Welcome',
-            headerShown: false,
-            animation: 'none',
-            presentation: 'fullScreenModal',
-          }} 
-        />
-        <Stack.Screen
-          name="onboarding"
-          options={{
-            headerShown: false,
-            animation: "fade",
-          }}
-        />
-        <Stack.Screen 
-          name="meditation/[id]" 
-          options={{ 
+      <Stack.Screen
+        name="login"
+        options={{
+          title: 'Welcome',
           headerShown: false,
-        }} 
+          animation: 'none',
+          presentation: 'fullScreenModal',
+        }}
       />
-      <Stack.Screen 
-        name="sleep" 
-        options={{ 
+      <Stack.Screen
+        name="admin"
+        options={{
           headerShown: false,
-          }} 
-        />
-        <Stack.Screen 
-          name="breathing" 
-          options={{ 
-            title: 'Breathe',
-            presentation: 'modal',
-          headerShown: false,
-          }} 
-        />
-        <Stack.Screen 
-          name="stats" 
-          options={{ 
-            headerShown: false,
-          }} 
-        />
-        <Stack.Screen 
-          name="settings" 
-          options={{ 
-            headerShown: false,
-          }} 
-        />
-        <Stack.Screen 
-          name="terms" 
-          options={{ 
-            headerShown: false,
-          }} 
-        />
-        <Stack.Screen 
-          name="privacy" 
-          options={{ 
-            headerShown: false,
-          }} 
-        />
-        <Stack.Screen 
-          name="sleep-sounds" 
-          options={{ 
-            headerShown: false,
-          }} 
-        />
-        <Stack.Screen 
-          name="meditations" 
-          options={{ 
-            headerShown: false,
-          }} 
-        />
-        <Stack.Screen 
-          name="music" 
-          options={{ 
-            headerShown: false,
-          }} 
-        />
-        <Stack.Screen 
-          name="course" 
-          options={{ 
-            headerShown: false,
-          }} 
-        />
-        <Stack.Screen 
-          name="series" 
-          options={{ 
-            headerShown: false,
-          }} 
-        />
-        <Stack.Screen 
-          name="album" 
-          options={{ 
-            headerShown: false,
-          }} 
-        />
-        <Stack.Screen 
-          name="emergency" 
-          options={{ 
-            headerShown: false,
-          }} 
-        />
-        <Stack.Screen 
-          name="downloads" 
-          options={{ 
-            headerShown: false,
-          }} 
-        />
-        <Stack.Screen 
-          name="admin" 
-          options={{ 
-            headerShown: false,
-          }} 
-        />
-      </Stack>
+        }}
+      />
+    </Stack>
   );
 }
 

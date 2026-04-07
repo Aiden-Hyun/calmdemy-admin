@@ -1,3 +1,35 @@
+/**
+ * ARCHITECTURAL ROLE:
+ * Form schema and value normalization for the metadata edit feature. Implements the Strategy pattern
+ * with collection-specific field definitions, allowing each content type to declare which fields are
+ * editable and in what format.
+ *
+ * DESIGN PATTERNS:
+ * - **Strategy Pattern**: CONTENT_MANAGER_EDIT_FIELDS is a mapping of collection → field array.
+ *   Each collection strategy defines required fields, input types, validation rules, and dropdown options.
+ * - **Validation Pipeline**: Three-stage validation flow:
+ *   1. normalizeDetailValue() — normalize raw Firestore data → editable values (coerce types)
+ *   2. normalizeFormValue() — normalize form input string → editable value (parse and validate)
+ *   3. evaluateMetadataForm() — apply required field checks, compare to initial, return patch
+ * - **Adapter Pattern**: buildEditableValues() and buildEditFormValues() adapt between:
+ *   - ContentManagerEditableValues (model layer: mixed types, nulls allowed)
+ *   - ContentManagerEditFormValues (form layer: all strings, empty string for null)
+ * - **Normalization Layers**: Form values (strings) → Normalized values (typed) → Patch (changed only)
+ *
+ * KEY CONCEPTS:
+ * - **EditableValues**: Internal model format; supports mixed types (string, number, string[])
+ *   and null for "not set". Stored in Firestore.
+ * - **EditFormValues**: Form input format; all values are strings or string arrays.
+ *   Empty string represents null/unset. UX-friendly.
+ * - **Patch**: Only fields that actually changed, used for updateContentMetadata() Cloud Function.
+ * - **Dirty Checking**: isDirty = patch is non-empty. Prevents saving unchanged forms.
+ * - **Validation**: Required fields, type coercion, option whitelisting (prevent invalid selects).
+ *
+ * DEPENDENCIES:
+ * - Used by detail screen form and edit hook validation logic
+ * - Each collection has unique field schema (e.g., guided_meditations has themes/techniques multiselect)
+ */
+
 import {
   ContentManagerCollection,
   ContentManagerEditFieldDefinition,
@@ -7,6 +39,10 @@ import {
   ContentManagerEditableValues,
 } from '../types';
 
+/**
+ * Shared dropdown options across multiple content types.
+ * Stored as constants to enable easy maintenance (update once, applies everywhere).
+ */
 const DIFFICULTY_OPTIONS: ContentManagerEditFieldOption[] = [
   { value: 'beginner', label: 'Beginner' },
   { value: 'intermediate', label: 'Intermediate' },
@@ -44,6 +80,31 @@ const BEDTIME_CATEGORY_OPTIONS: ContentManagerEditFieldOption[] = [
   { value: 'fairytale', label: 'Fairytale' },
 ];
 
+/**
+ * Schema registry: collection → array of editable field definitions.
+ * Each collection declares which fields the admin UI can edit, their types, validation rules, and UI hints.
+ *
+ * FIELD PROPERTIES:
+ * - name: Property name in Firestore document (snake_case)
+ * - label: Human-readable label for form (title case)
+ * - type: Input type (text, textarea, number, select, multiselect)
+ * - required: If true, validation enforces non-empty, UI marks with asterisk
+ * - options: For select/multiselect, array of {value, label} pairs (enum whitelist)
+ * - placeholder: HTML placeholder text (text/textarea inputs)
+ * - helperText: Hint text below field (e.g., "Hex or named color")
+ *
+ * COLLECTION DIFFERENCES:
+ * - Guided meditations: themes and techniques are multiselect (array)
+ * - Sleep meditations: instructor, icon, color are required (UI always present)
+ * - Courses: allow optional icon; course sessions allow fewer fields than parent course
+ * - Music items (white_noise, music, asmr): identical schema
+ * - Breathing exercises: difficulty select required
+ *
+ * NOTES:
+ * - Some fields are display-only (audioPath, code) and not in edit schema
+ * - Duration fields are often read-only (computed from audio/content)
+ * - Color fields accept hex codes or named colors; no live preview validation here
+ */
 export const CONTENT_MANAGER_EDIT_FIELDS: Record<
   ContentManagerCollection,
   ContentManagerEditFieldDefinition[]
@@ -339,6 +400,41 @@ export function formatEditableValue(
   return String(value);
 }
 
+/**
+ * Primary validation and patch-building function for the edit form.
+ * Called after user clicks Save; validates all fields and generates the minimal patch for backend.
+ *
+ * VALIDATION FLOW:
+ * 1. For each field in schema:
+ *    - normalizeFormValue() converts form string → typed value
+ *    - Check for 'invalid' marker (type coercion failed)
+ *    - Check required field constraints
+ *    - If valid, add to normalizedValues; if changed from initial, add to patch
+ * 2. Validate change reason (non-empty)
+ * 3. Return validation result: fieldErrors dict, patch, isDirty flag, isValid boolean
+ *
+ * DIRTY CHECKING:
+ * - isDirty = patch.length > 0 (at least one field changed)
+ * - Used to disable Save button if form unchanged; prevents unnecessary backend calls
+ * - If user opens form, makes no changes, clicks Save → isDirty=false → error message "Make a change"
+ *
+ * PATCH OPTIMIZATION:
+ * - Only fields that changed from initial state are in patch
+ * - valuesEqual() compares initial[field] vs normalizedValue
+ * - Reduces backend diff computation and audit log verbosity
+ * - Backend returns changedFields array to confirm what it actually updated
+ *
+ * ERROR MESSAGES:
+ * - fieldErrors map field name → user-friendly error (shown in red below field)
+ * - reasonError shown in separate UI section
+ * - Form.isValid = no fieldErrors && no reasonError
+ *
+ * @param collection - Content type (validates against schema)
+ * @param initialValues - Values loaded from Firestore (used for change detection)
+ * @param formValues - Current form state (all strings/string arrays)
+ * @param reason - Admin's explanation for this change (audit trail)
+ * @returns Validation result with patch, normalized values, errors, and flags
+ */
 export function evaluateMetadataForm(
   collection: ContentManagerCollection,
   initialValues: ContentManagerEditableValues,

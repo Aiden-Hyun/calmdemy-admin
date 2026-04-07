@@ -1,7 +1,38 @@
+/**
+ * ARCHITECTURAL ROLE:
+ * Central type definitions for the Content Manager feature. This module serves as the single source of truth
+ * for all TypeScript interfaces and types used across the content-manager feature, establishing a clear contract
+ * between data layers, hooks, and UI components.
+ *
+ * DESIGN PATTERNS:
+ * - **Nominal Type Unions**: Uses TypeScript union types (ContentManagerCollection, ContentManagerAccess) to create
+ *   strongly-typed domain models that prevent string type confusion at compile-time.
+ * - **Configuration Objects as Types**: Filter states and form values are typed as interfaces, allowing type-safe
+ *   serialization and state management in Redux/Zustand patterns.
+ * - **Audit Trail Pattern**: ContentManagerAuditEntry captures before/after values and metadata, enabling change
+ *   tracking and regulatory compliance workflows.
+ * - **Discriminated Unions**: Uses status and collection fields to distinguish different content types and states.
+ *
+ * KEY DEPENDENCIES:
+ * - Firebase Timestamp for date serialization
+ * - Global app types for ContentReportStatus and ReportCategory
+ *
+ * CONSUMERS:
+ * - Data layer (repositories, search, edit config) for data modeling
+ * - Hooks (useContentManager) for state management
+ * - UI components and screens for prop typing
+ * - API contracts between client and backend
+ */
+
 import { Timestamp } from 'firebase/firestore';
 import { ContentJob } from '@features/admin/types';
 import { ContentReportStatus, ReportCategory } from '@/types';
 
+/**
+ * Union type representing all supported content collections in the app.
+ * Used to scope queries, apply collection-specific logic, and validate content types.
+ * Each collection maps to a Firestore collection and has unique metadata/editing rules.
+ */
 export type ContentManagerCollection =
   | 'guided_meditations'
   | 'sleep_meditations'

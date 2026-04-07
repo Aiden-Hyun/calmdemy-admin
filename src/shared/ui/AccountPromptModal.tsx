@@ -1,3 +1,46 @@
+/**
+ * ============================================================
+ * AccountPromptModal.tsx — Account Linking Modal Dialog
+ * (Modal Composition Pattern, State Machine, Error Handling)
+ * ============================================================
+ *
+ * Architectural Role:
+ *   This modal component prompts anonymous users to secure their subscription
+ *   by linking an OAuth provider (Google or Apple). It's displayed early in
+ *   the app lifecycle to encourage account persistence and cross-device sync.
+ *   It acts as a Gatekeeper at the subscription boundary — ensuring that users
+ *   don't lose access to paid content if they reinstall or switch devices.
+ *
+ * Design Patterns:
+ *   - Modal Composition: Manages multiple overlapping modals in a coordinated way
+ *     using local state flags (collisionError, showSwitchWarning). Each modal
+ *     has its own visibility flag and event handlers, but they're all orchestrated
+ *     from a single parent component.
+ *   - State Machine (implicit): Transitions between states:
+ *     1. Initial (showing sign-in buttons)
+ *     2. Loading (one provider in progress, buttons disabled)
+ *     3. Collision (credential email taken on another account, show nested modal)
+ *     4. Warning (user confirmed they want to switch accounts, show confirmation)
+ *   - Error Recovery: Catches CredentialCollisionError and routes it to a
+ *     specialized modal (CredentialCollisionModal) rather than failing the flow
+ *   - Provider Strategy Pattern: Conditionally renders Apple Sign-In only on iOS
+ *     if the native capability is available (runtime capability detection).
+ *   - Uncontrolled Component (props-only): visible and onClose props make this
+ *     fully uncontrolled — the parent decides visibility, this component never
+ *     initiates its own dismissal except via onClose callbacks.
+ *
+ * Consumed By:
+ *   Subscription/Account initialization flows, typically called from a ViewModel
+ *   hook that checks whether the current user is anonymous and prompts if needed.
+ *
+ * Key Dependencies:
+ *   - useAuth: Provides OAuth linking methods (upgradeAnonymousWithGoogle/Apple)
+ *   - useTheme: Supplies color and typography for this modal's styling
+ *   - CredentialCollisionModal: Child modal for handling email collisions
+ *   - AccountSwitchWarning: Child modal for confirming account switches
+ * ============================================================
+ */
+
 import React, { useMemo, useState } from "react";
 import {
   View,
@@ -23,12 +66,28 @@ interface AccountPromptModalProps {
   onClose: () => void;
 }
 
+/**
+ * AccountPromptModal — Account Linking Orchestrator
+ *
+ * This modal orchestrates the account linking flow, handling three scenarios:
+ * 1. Happy path: User links with Google or Apple successfully
+ * 2. Collision: Email is already registered with another provider
+ * 3. Account switch: User accepts the collision and switches accounts
+ *
+ * The component manages local state for each scenario and coordinates three
+ * distinct modal surfaces (AccountPromptModal → CredentialCollisionModal →
+ * AccountSwitchWarning) using a state machine approach with multiple boolean
+ * flags. See inline comments for each state transition.
+ */
 export function AccountPromptModal({
   visible,
   onClose,
 }: AccountPromptModalProps) {
   const { theme, isDark } = useTheme();
   const insets = useSafeAreaInsets();
+  // useMemo memoizes the StyleSheet object to prevent unnecessary recalculations
+  // on every render. The dependency array [theme, isDark] ensures styles only
+  // regenerate when the theme or dark mode setting actually changes.
   const styles = useMemo(() => createStyles(theme, isDark), [theme, isDark]);
   const {
     upgradeAnonymousWithGoogle,
@@ -37,35 +96,46 @@ export function AccountPromptModal({
     signInWithPendingCredential,
   } = useAuth();
 
+  // --- State Management: Three overlapping modals, each with its own visibility flag ---
+  // isLoading: global loading state (disables all buttons)
+  // loadingProvider: tracks which OAuth provider is currently in flight (for per-button spinners)
+  // collisionError: captures the CredentialCollisionError and shows the collision modal
+  // showSwitchWarning: shows the account-switch confirmation modal
   const [isLoading, setIsLoading] = useState(false);
   const [loadingProvider, setLoadingProvider] = useState<string | null>(null);
   const [collisionError, setCollisionError] =
     useState<CredentialCollisionError | null>(null);
   const [showSwitchWarning, setShowSwitchWarning] = useState(false);
 
+  /**
+   * Upgrades the anonymous user to a Google OAuth account.
+   *
+   * This implements a classic async handler pattern: set loading state, call
+   * the ViewModel method, handle success/error, and clear loading state. The
+   * error handling is defensive — it explicitly checks for CredentialCollisionError
+   * (a known, recoverable error) before falling back to a generic alert.
+   *
+   * The "User cancelled" check is a guard clause that prevents noise alerts
+   * when the user dismisses the native OAuth dialog intentionally.
+   */
   const handleGoogleLink = async () => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/abd8d170-6f53-45be-bd37-3634e6180c4d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AccountPromptModal.tsx:handleGoogleLink:entry',message:'handleGoogleLink called',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
     setIsLoading(true);
     setLoadingProvider("google");
     try {
       await upgradeAnonymousWithGoogle();
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/abd8d170-6f53-45be-bd37-3634e6180c4d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AccountPromptModal.tsx:handleGoogleLink:success',message:'upgradeAnonymousWithGoogle succeeded - THIS SHOULD NOT HAPPEN for collision',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
-      // #endregion
+      // Success path: user is now authenticated with Google
       Alert.alert(
         "Account Secured!",
         "Your subscription is now linked to your Google account."
       );
       onClose();
     } catch (error: any) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/abd8d170-6f53-45be-bd37-3634e6180c4d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AccountPromptModal.tsx:handleGoogleLink:catch',message:'Caught error',data:{errorType:error?.constructor?.name,isCollisionError:error instanceof CredentialCollisionError,errorMessage:error?.message,errorCode:error?.code},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B,D'})}).catch(()=>{});
-      // #endregion
+      // Defensive error handling: check the specific error type first
+      // CredentialCollisionError is recoverable — route to the collision modal
       if (error instanceof CredentialCollisionError) {
         setCollisionError(error);
       } else if (error.message !== "User cancelled") {
+        // Guard clause: suppress alerts for intentional user cancellations
         Alert.alert("Error", error.message || "Failed to link Google account");
       }
     } finally {
@@ -74,6 +144,10 @@ export function AccountPromptModal({
     }
   };
 
+  /**
+   * Apple Sign-In equivalent to handleGoogleLink.
+   * Follows the same error-handling pattern and state management.
+   */
   const handleAppleLink = async () => {
     setIsLoading(true);
     setLoadingProvider("apple");
@@ -96,12 +170,27 @@ export function AccountPromptModal({
     }
   };
 
+  /**
+   * Handles the "sign in to the other account" button from CredentialCollisionModal.
+   * Transitions from the collision state to the switch-warning state, showing a
+   * confirmation modal before actually executing the account switch.
+   *
+   * This is a State Machine transition: collisionError exists → showSwitchWarning = true
+   */
   const handleCollisionSignIn = () => {
-    // Show warning before switching accounts
+    // State transition: collision modal → switch warning modal
     setShowSwitchWarning(true);
   };
 
+  /**
+   * Confirms the account switch after the user reviewed the warning.
+   * Uses the pendingCredential from the collision error to sign in to the
+   * other account, then clears both error states and closes the modal.
+   *
+   * Guard clause: if pendingCredential is missing, bail silently (defensive programming).
+   */
   const handleConfirmSwitch = async () => {
+    // Guard clause: missing credential indicates a corrupted state
     if (!collisionError?.pendingCredential) return;
     try {
       await signInWithPendingCredential(collisionError.pendingCredential);
@@ -112,17 +201,25 @@ export function AccountPromptModal({
     }
   };
 
+  /**
+   * Resets the collision error state, allowing the user to try a different
+   * authentication method. This is the "Back" path from the collision modal.
+   */
   const handleCollisionDifferentMethod = () => {
     setCollisionError(null);
-    // User can try a different method
+    // User is returned to the main sign-in buttons; they can try Google or Apple again
   };
 
+  /**
+   * Closes the modal without linking an account. Implements the "Maybe later" path.
+   */
   const handleContinue = () => {
     onClose();
   };
 
   return (
     <>
+      {/* --- Main Modal: Sign-in buttons (hidden when collision error exists) --- */}
       <Modal
         visible={visible && !collisionError}
         transparent
@@ -133,7 +230,7 @@ export function AccountPromptModal({
           <View
             style={[styles.container, { paddingBottom: insets.bottom + 24 }]}
           >
-            {/* Icon */}
+            {/* Branded icon header with gradient background */}
             <LinearGradient
               colors={[theme.colors.primary, theme.colors.primaryDark]}
               style={styles.iconContainer}
@@ -141,16 +238,16 @@ export function AccountPromptModal({
               <Ionicons name="shield-checkmark-outline" size={32} color="#fff" />
             </LinearGradient>
 
-            {/* Title */}
             <Text style={styles.title}>Secure Your Subscription</Text>
-
-            {/* Description */}
             <Text style={styles.description}>
               Link an account to keep your subscription safe and sync your
               favorites across devices.
             </Text>
 
-            {/* Apple Sign In - show first on iOS */}
+            {/* --- Platform-specific rendering: Apple Sign-In only on iOS --- */}
+            {/* Strategy Pattern: runtime capability check. If Apple Sign-In is not
+                available on this device (e.g., iOS simulator, older OS), this
+                Pressable is not rendered at all. */}
             {Platform.OS === "ios" && isAppleSignInAvailable && (
               <Pressable
                 style={({ pressed }) => [
@@ -162,6 +259,9 @@ export function AccountPromptModal({
                 onPress={handleAppleLink}
                 disabled={isLoading}
               >
+                {/* Conditional rendering: show spinner while this provider is loading,
+                    icon + text otherwise. This provides visual feedback that a specific
+                    OAuth provider is in flight. */}
                 {loadingProvider === "apple" ? (
                   <ActivityIndicator color="#fff" size="small" />
                 ) : (
@@ -175,7 +275,7 @@ export function AccountPromptModal({
               </Pressable>
             )}
 
-            {/* Google Sign In */}
+            {/* Google Sign-In button (available on all platforms) */}
             <Pressable
               style={({ pressed }) => [
                 styles.providerButton,
@@ -198,7 +298,7 @@ export function AccountPromptModal({
               )}
             </Pressable>
 
-            {/* Continue without account */}
+            {/* Escape hatch: user can dismiss without linking */}
             <Pressable
               style={({ pressed }) => [
                 styles.secondaryButton,
@@ -210,7 +310,7 @@ export function AccountPromptModal({
               <Text style={styles.secondaryButtonText}>Maybe later</Text>
             </Pressable>
 
-            {/* Warning note */}
+            {/* Informational callout: communicates the risk of not linking */}
             <View style={styles.warningNote}>
               <Ionicons
                 name="information-circle-outline"
@@ -226,7 +326,11 @@ export function AccountPromptModal({
         </View>
       </Modal>
 
-      {/* Credential collision modal */}
+      {/* --- Modal 2: Credential Collision Handling --- */}
+      {/* Conditional rendering: only shown when collisionError is non-null.
+          This is a Composition pattern — the parent orchestrates child modals
+          based on its local state. CredentialCollisionModal is a specialized
+          UI for handling the specific case of "email already registered". */}
       {collisionError && (
         <CredentialCollisionModal
           visible={!!collisionError}
@@ -238,7 +342,10 @@ export function AccountPromptModal({
         />
       )}
 
-      {/* Account switch warning */}
+      {/* --- Modal 3: Account Switch Confirmation --- */}
+      {/* Defensive composition: AccountSwitchWarning only receives the callback
+          if collisionError exists (so pendingCredential is available). This
+          prevents the warning from being shown without context. */}
       <AccountSwitchWarning
         visible={showSwitchWarning}
         onClose={() => setShowSwitchWarning(false)}

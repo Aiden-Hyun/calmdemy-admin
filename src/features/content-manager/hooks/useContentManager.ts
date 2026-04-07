@@ -1,3 +1,30 @@
+/**
+ * ARCHITECTURAL ROLE:
+ * Custom hooks implementing MVVM (Model-View-ViewModel) pattern. Orchestrates data fetching, state
+ * management, filtering, and mutations for three main views: catalog (list items), reports (moderation inbox),
+ * and detail (edit item metadata, view history, manage reports).
+ *
+ * DESIGN PATTERNS:
+ * - **MVVM**: Hooks are the ViewModel layer; they manage state (model) and expose methods/state for UI (view).
+ * - **State Machine**: Track loading states (isLoading, isRefreshing, isSaving) to coordinate UI spinners and button states.
+ * - **Ref Tracking**: hasLoadedRef tracks if data has loaded at least once; useRefreshOnFocus avoids reloads on refocus before first load.
+ * - **Composition**: Three separate hooks (catalog, reports summary, reports inbox, detail) for different concerns.
+ *   Complex detail hook orchestrates all features: edit, audit, reports, repair actions.
+ * - **Validation Integration**: evaluateMetadataForm() is called locally to validate before save.
+ *
+ * KEY HOOKS:
+ * - useContentManagerCatalog(): List all items with filters
+ * - useContentManagerReportsSummary(): Badge counter of open reports
+ * - useContentManagerReportsInbox(): Full reports list with filters, update status
+ * - useContentManagerDetail(): Load item detail, history, reports; edit metadata; run repair actions
+ *
+ * CONSUMERS:
+ * - ContentManagerScreen: uses useContentManagerCatalog
+ * - ContentManagerDetailScreen: uses useContentManagerDetail
+ * - ContentManagerReportsScreen: uses useContentManagerReportsInbox
+ * - Main nav badge: uses useContentManagerReportsSummary
+ */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import {
@@ -41,6 +68,14 @@ import {
 } from '../types';
 import { ContentReportStatus } from '@/types';
 
+/**
+ * Safely extracts error message from unknown error object.
+ * Used in catch blocks to provide meaningful error text to UI.
+ *
+ * @param error - Caught error (could be Error, string, or unknown)
+ * @param fallback - Message to use if error has no text
+ * @returns Human-friendly error message
+ */
 function getErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim()) {
     return error.message;
@@ -48,6 +83,18 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+/**
+ * Custom hook that triggers a load function when screen regains focus.
+ * Only loads if hasLoadedRef.current is true (already loaded once before).
+ *
+ * USAGE:
+ * - After initial load completes, set hasLoadedRef.current = true
+ * - On every focus, check flag; if true, call load() to refresh data
+ * - Prevents refreshing before first load completes (no flash of stale + new data)
+ *
+ * @param load - Async function to call on focus
+ * @param hasLoadedRef - Ref tracking if first load completed
+ */
 function useRefreshOnFocus(
   load: () => Promise<unknown> | void,
   hasLoadedRef: { current: boolean }
@@ -62,6 +109,32 @@ function useRefreshOnFocus(
   );
 }
 
+/**
+ * ViewModel for the content catalog screen. Manages:
+ * - Loading all items from repository
+ * - Maintaining filter state (type, access, thumbnail, search query)
+ * - Computing filtered results in real-time (useMemo)
+ * - Exposing setter callbacks for filter UI controls
+ *
+ * STATE:
+ * - items: Raw unfiltered list from repository
+ * - filters: Current filter state object
+ * - isLoading: Initial load in progress (show spinner)
+ * - isRefreshing: Refresh in progress (show refresh indicator)
+ * - error: Last load error message (show error toast if present)
+ *
+ * FILTERING:
+ * - filteredItems = filterContentManagerItems(items, filters)
+ * - Recomputed every time items or filters change (useMemo optimization)
+ * - Avoids recomputing on render if inputs unchanged
+ *
+ * LIFECYCLE:
+ * - On mount: load('initial') → setIsLoading=true during fetch
+ * - On focus (if loaded before): load('refresh') → setIsRefreshing=true during fetch
+ * - On filter change: setFilters updates state → filteredItems recomputes
+ *
+ * @returns Object with items, filteredItems, filters, loading states, error, and setter callbacks
+ */
 export function useContentManagerCatalog() {
   const [items, setItems] = useState<ContentManagerItemSummary[]>([]);
   const [filters, setFilters] = useState<ContentManagerFilterState>(

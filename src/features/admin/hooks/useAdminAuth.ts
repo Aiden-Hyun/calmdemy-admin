@@ -1,3 +1,23 @@
+/**
+ * Custom hook for admin access control.
+ *
+ * ARCHITECTURAL ROLE:
+ * Guards the admin UI behind role-based access control.
+ * Coordinates Firebase custom claims (primary) with Firestore fallback (legacy).
+ *
+ * DESIGN PATTERNS:
+ * - Authorization via JWT custom claims: Most reliable (server-set, immutable)
+ * - Fallback mechanism: Firestore role check if claims unavailable (backwards compat)
+ * - Abort pattern: Cleanup function prevents state updates on unmounted components
+ *
+ * FLOW:
+ * 1. Wait for auth system to load (authLoading)
+ * 2. Check for anonymous user (not admin)
+ * 3. Fetch ID token and inspect claims.admin
+ * 4. If missing, fall back to Firestore check
+ * 5. Subscribers use isAdmin + isLoading for conditional rendering
+ */
+
 import { useEffect, useState } from 'react';
 import { useAuth } from '@core/providers/contexts/AuthContext';
 import { checkIsAdmin } from '../data/adminRepository';
@@ -7,6 +27,14 @@ interface UseAdminAuthResult {
   isLoading: boolean;
 }
 
+/**
+ * Determine if the authenticated user has admin privileges.
+ *
+ * PRIMARY: Firebase custom claims (claims.admin = true, set server-side)
+ * FALLBACK: Firestore admin role document (display only, not authoritative)
+ *
+ * The abort pattern (cancelled flag) prevents state updates after unmount.
+ */
 export function useAdminAuth(): UseAdminAuthResult {
   const { user, loading: authLoading } = useAuth();
   const [isAdmin, setIsAdmin] = useState(false);

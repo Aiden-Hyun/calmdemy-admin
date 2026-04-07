@@ -1,7 +1,45 @@
+/**
+ * Central type definitions for the admin content factory system.
+ *
+ * ARCHITECTURAL ROLE:
+ * This file defines all domain types representing:
+ * - Job execution lifecycle (JobStatus, ContentJob, FactoryJob, FactoryJobRun)
+ * - Content specifications (FactoryContentType, ContentJobParams, ContentDraft)
+ * - Worker management (WorkerStatus, WorkerControl, WorkerStackStatus)
+ * - Supporting domain objects (SubjectPlan, CourseTtsProgress, etc.)
+ *
+ * DESIGN PATTERNS:
+ * - Domain-Driven Design (DDD): Types represent pure domain entities, not API contracts
+ * - State Machine: JobStatus and related enums model workflow states
+ * - Aggregates: ContentJob is the job aggregate root; contains nested params, scripts, audio results
+ * - Value Objects: SubjectLevelCounts, CourseTtsProgress, WorkerControl state snapshots
+ *
+ * KEY CONCEPTS:
+ * - Dual-engine architecture: Jobs track both legacy "content_job" and newer "factory_job" engines
+ * - V2 job dispatch: v2JobId, v2RunId, v2Locked track the factory runtime equivalents
+ * - Approval workflows: CourseRegenerationRequest, ScriptApprovalRequest, SubjectPlanApprovalRequest
+ * - Timing metrics: effectiveElapsedMs, effectiveWorkerMs track accurate job duration accounting
+ * - Worker pool model: WorkerStatus, WorkerControl, WorkerStackStatus manage distributed execution
+ */
+
 import { Timestamp } from 'firebase/firestore';
 
 // ==================== JOB STATUS ====================
 
+/**
+ * State Machine enum representing the job execution pipeline.
+ *
+ * Linear progression (for single content and courses):
+ * pending -> llm_generating -> qa_formatting -> image_generating -> tts_pending
+ *   -> tts_converting -> post_processing -> uploading -> publishing -> completed
+ *
+ * Non-linear states:
+ * - paused: User-requested freeze; can resume from current status
+ * - failed: Terminal state; may support retry/resume if resumeAvailable=true
+ *
+ * Multi-job workflows (full_subject):
+ * Parent job manages child course jobs; states coordinate parent + children lifecycle.
+ */
 export type JobStatus =
   | 'pending'
   | 'llm_generating'
@@ -16,6 +54,7 @@ export type JobStatus =
   | 'completed'
   | 'failed';
 
+/** Canonical order of job statuses for pipeline visualization and comparisons. */
 export const JOB_STATUS_ORDER: JobStatus[] = [
   'pending',
   'llm_generating',

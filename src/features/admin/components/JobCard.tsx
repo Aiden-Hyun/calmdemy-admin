@@ -16,6 +16,11 @@ import { Theme } from '@/theme';
 import { subscribeToFactoryJob, subscribeToFactoryJobRun } from '../data/adminRepository';
 import { resolveJobExecutionView } from '../utils/jobExecutionState';
 
+/**
+ * DESIGN PATTERN: Card component for list view.
+ * Displays condensed job info with quick-action buttons (publish, thumbnail).
+ * Coordinates with JobList for Master-Detail navigation.
+ */
 interface JobCardProps {
   job: ContentJob;
   activeWorkers?: ActiveJobWorker[];
@@ -62,6 +67,11 @@ function getStatusIcon(status: string): keyof typeof Ionicons.glyphMap {
   }
 }
 
+/**
+ * Local hook: Resolve dual-engine execution state for a single job card.
+ * Subscribes to FactoryJob and FactoryJobRun only if job is V2.
+ * This is similar to useJobDetail, but scoped to card display only.
+ */
 function useJobCardExecutionView(job: ContentJob) {
   const [factoryJob, setFactoryJob] = useState<FactoryJob | null>(null);
   const [factoryRun, setFactoryRun] = useState<FactoryJobRun | null>(null);
@@ -100,6 +110,26 @@ function useJobCardExecutionView(job: ContentJob) {
   );
 }
 
+/**
+ * Render a job card in the list.
+ *
+ * CARD LAYOUT:
+ * 1. Header: Status badge + time elapsed
+ * 2. Headline: Job topic/title
+ * 3. Metadata: Content type, duration/courses, model
+ * 4. Thumbnail: Preview image (if available)
+ * 5. Badges: Publish status, thumbnail status, TTS progress, timing
+ * 6. Workers: Active workers executing this job
+ * 7. Error: Display error message if failed
+ *
+ * QUICK ACTIONS:
+ * - Publish badge: Tap to publish (if eligible)
+ * - Thumbnail badge: Tap to generate thumbnail (if eligible)
+ *
+ * DERIVED STATE (expensive computation, memoized):
+ * All helper functions (getTimingLabel, getTtsProgressLabel, etc.) are
+ * memoized to avoid recalculating on every card render.
+ */
 export function JobCard({
   job,
   activeWorkers = [],
@@ -138,6 +168,7 @@ export function JobCard({
   const displayError = effectiveStatus === 'failed' ? job.error : undefined;
   const thumbnailUrl = useMemo(() => String(job.thumbnailUrl || '').trim(), [job.thumbnailUrl]);
 
+  /** Format creation timestamp as relative time (e.g., "2h ago"). */
   const timeAgo = useMemo(() => {
     if (!job.createdAt?.toDate) return '';
     const diff = Date.now() - job.createdAt.toDate().getTime();
@@ -150,6 +181,7 @@ export function JobCard({
     return `${days}d ago`;
   }, [job.createdAt]);
 
+  /** Handle publish action, stopping propagation to card click. */
   const handlePublishPress = (event: GestureResponderEvent) => {
     event.stopPropagation?.();
     if (!canPublishFromCard || !onPublish) {
@@ -158,6 +190,7 @@ export function JobCard({
     onPublish(job);
   };
 
+  /** Handle generate thumbnail action, stopping propagation to card click. */
   const handleGenerateThumbnailPress = (event: GestureResponderEvent) => {
     event.stopPropagation?.();
     if (!canGenerateThumbnailFromCard || !onGenerateThumbnail) {

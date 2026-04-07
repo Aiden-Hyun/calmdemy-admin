@@ -1,3 +1,18 @@
+/**
+ * Visual pipeline stepper showing job execution progress.
+ *
+ * DESIGN PATTERN:
+ * - Pipeline visualization: Linear progression of steps from pending to publishing
+ * - Status indicators: Icons + colors show done/active/failed states
+ *
+ * STATE LEGEND:
+ * - Gray dot: Not yet reached
+ * - Blue radio button: Currently active
+ * - Green checkmark: Completed step
+ * - Red X: Failed at this step (terminal)
+ * - Paused: Shows as if paused on llm_generating (visual anchor point)
+ */
+
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -13,10 +28,15 @@ const PIPELINE_STEPS = JOB_STATUS_ORDER.filter(
   (s) => s !== 'pending' && s !== 'completed' && s !== 'paused'
 );
 
+/**
+ * Render linear pipeline stepper.
+ * Maps each status to its icon and styling based on execution progress.
+ */
 export function PipelineStepper({ currentStatus }: PipelineStepperProps) {
   const { theme } = useTheme();
   const styles = createStyles(theme);
 
+  // Paused jobs are visually anchored at llm_generating (show where they paused)
   const displayStatus = currentStatus === 'paused' ? 'llm_generating' : currentStatus;
   const currentIndex = JOB_STATUS_ORDER.indexOf(displayStatus);
   const isFailed = currentStatus === 'failed';

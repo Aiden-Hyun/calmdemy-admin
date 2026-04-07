@@ -1,4 +1,48 @@
-// Color palette types
+/**
+ * ============================================================
+ * theme/index.ts — Design Token Registry (Theme Layer)
+ * ============================================================
+ *
+ * Architectural Role:
+ *   Central design token system for the entire Calmdemy app.
+ *   Defines colors, spacing, typography, shadows, and gradients
+ *   as structured objects rather than scattered magic values.
+ *   This is the Single Source of Truth for visual design —
+ *   every component references these tokens instead of hardcoding
+ *   hex codes or pixel values.
+ *
+ * Design Patterns:
+ *   - Token-based Theming: All visual properties are expressed as
+ *     semantic tokens (e.g., `colors.primary`, `spacing.md`) so a
+ *     theme swap only requires changing the token values, not every
+ *     component that uses them.
+ *   - Factory Function (createTheme): Constructs a complete theme
+ *     object from a color palette + dark-mode flag, composing
+ *     colors with shared layout tokens and mode-dependent shadows/
+ *     gradients. This is the Builder pattern in spirit.
+ *   - Light/Dark Dual Palettes: lightColors and darkColors implement
+ *     the Strategy pattern — the ThemeContext swaps between them at
+ *     runtime based on user preference.
+ *   - Sleep Mode Override: A third palette (sleepBackground, sleepSurface,
+ *     etc.) is always dark regardless of the user's theme preference,
+ *     because bright screens defeat the purpose of bedtime content.
+ *
+ * Key Consumers:
+ *   - ThemeContext (src/core/providers/contexts/ThemeContext.tsx)
+ *   - Every UI component that reads `useTheme()` for styling
+ *
+ * Typography System:
+ *   Three font families serve distinct roles:
+ *   - Fraunces (serif display): Headlines and hero text
+ *   - Lora (serif body): Long-form reading and quotes
+ *   - DM Sans (sans-serif UI): Buttons, labels, captions
+ * ============================================================
+ */
+
+/**
+ * Complete color palette contract. Every theme variant (light, dark)
+ * must implement this interface, ensuring no missing tokens at compile time.
+ */
 export interface ThemeColors {
   // Primary palette - Sage Green
   primary: string;
@@ -64,7 +108,12 @@ export interface ThemeColors {
   sleepTextMuted: string;
 }
 
-// Light mode colors
+/**
+ * Light mode palette — warm, organic tones inspired by nature.
+ * The sage green primary + terracotta secondary + dusty rose accent
+ * triad creates a calming visual identity distinct from the typical
+ * blue/purple meditation app palette.
+ */
 export const lightColors: ThemeColors = {
     // Primary palette - Sage Green
     primary: '#8B9F82',
@@ -130,7 +179,12 @@ export const lightColors: ThemeColors = {
     sleepTextMuted: '#8B8A99',
 };
 
-// Dark mode colors
+/**
+ * Dark mode palette — slightly brighter primaries for WCAG contrast
+ * on dark backgrounds. The gray scale is inverted (50 = darkest)
+ * so that `gray.50` always means "near-background" regardless of mode,
+ * enabling components to use semantic gray references.
+ */
 export const darkColors: ThemeColors = {
   // Primary palette - Sage Green (slightly brighter for dark mode)
   primary: '#9DB094',
@@ -196,7 +250,11 @@ export const darkColors: ThemeColors = {
   sleepTextMuted: '#8B8A99',
 };
 
-// Shared non-color theme values
+/**
+ * Non-color design tokens shared across both light and dark themes.
+ * These values are mode-independent — spacing, radii, fonts, and
+ * typography scales don't change between light and dark mode.
+ */
 const sharedTheme = {
   spacing: {
     xs: 4,
@@ -316,7 +374,13 @@ const sharedTheme = {
   },
 };
   
-// Function to create shadows based on color scheme
+/**
+ * Factory function for platform-appropriate shadow tokens.
+ * Dark mode uses higher opacity shadows (they need to be more pronounced
+ * against dark backgrounds to be visible). The `glow` variant uses the
+ * primary color for a subtle halo effect on CTAs and focus indicators.
+ * Note: `elevation` is the Android equivalent of iOS shadowRadius.
+ */
 const createShadows = (isDark: boolean) => ({
     sm: {
     shadowColor: isDark ? '#000000' : '#3D3A38',
@@ -360,7 +424,12 @@ const createShadows = (isDark: boolean) => ({
     },
 });
   
-// Function to create gradients based on color scheme
+/**
+ * Gradient presets for background fills and decorative elements.
+ * `sleepyNight` and `dreamyPurple` are mode-independent — they're
+ * always dark because they're used exclusively in the Sleep tab,
+ * which maintains its own dark aesthetic regardless of system theme.
+ */
 const createGradients = (isDark: boolean) => ({
   warmSunrise: isDark ? ['#252321', '#1A1917'] : ['#FAF8F5', '#F5EDE3'],
   sage: isDark ? ['#7A8E71', '#6B7F65'] : ['#A8B89F', '#8B9F82'],
@@ -371,7 +440,13 @@ const createGradients = (isDark: boolean) => ({
   goldenHour: isDark ? ['#B69B6B', '#A68B5B'] : ['#D4C4A8', '#C4A77D'],
 });
 
-// Create a full theme object from colors
+/**
+ * Factory function that composes a complete theme from a color palette.
+ * This is the only entry point for theme construction — ThemeContext
+ * calls this with either lightColors or darkColors based on user pref.
+ * The spread of sharedTheme merges mode-independent tokens with
+ * mode-dependent colors/shadows/gradients into a single flat object.
+ */
 export function createTheme(colors: ThemeColors, isDark: boolean) {
   return {
     colors,
@@ -381,13 +456,15 @@ export function createTheme(colors: ThemeColors, isDark: boolean) {
 };
 }
 
-// Theme type
+/** Inferred theme type — auto-derived from createTheme's return shape. */
 export type Theme = ReturnType<typeof createTheme>;
 
-// Default light theme (for backwards compatibility during migration)
+// Default light theme — a convenience export for files that haven't yet
+// migrated to consuming theme from ThemeContext. Prefer useTheme() in new code.
 export const theme = createTheme(lightColors, false);
 
-// Helper for creating consistent card styles (using default theme for backwards compatibility)
+// Pre-built card style shorthand — avoids repeating the same 4 properties
+// across every card component. Uses the default (light) theme for legacy compat.
 export const cardStyle = {
   backgroundColor: theme.colors.surface,
   borderRadius: theme.borderRadius.xl,
@@ -395,7 +472,8 @@ export const cardStyle = {
   ...theme.shadows.sm,
 };
 
-// Helper for sleep mode card styles
+// Sleep-specific card style — intentionally omits shadows because the
+// sleep UI uses a flat, low-contrast aesthetic to reduce visual stimulation.
 export const sleepCardStyle = {
   backgroundColor: theme.colors.sleepSurface,
   borderRadius: theme.borderRadius.xl,

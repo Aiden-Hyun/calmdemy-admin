@@ -82,6 +82,11 @@ type Props = {
   onResumeSubject: () => Promise<void>;
   onDelete: () => void;
   onReview: () => void;
+  /**
+   * 'fullscreen' (default): renders the multi-column web grid based on viewport width.
+   * 'inspector': forces a single column so the view fits in a narrower right-hand pane.
+   */
+  layoutMode?: 'fullscreen' | 'inspector';
 };
 
 const SECTION_IDS = [
@@ -134,6 +139,7 @@ export function JobDetailView({
   onResumeSubject,
   onDelete,
   onReview,
+  layoutMode = 'fullscreen',
 }: Props) {
   const router = useRouter();
   const { theme } = useTheme();
@@ -715,7 +721,8 @@ export function JobDetailView({
   });
 
   const visibleSections = sections.filter((section) => section.shouldRender);
-  const webSectionColumns = getWebSectionColumns(viewportWidth);
+  const webSectionColumns =
+    layoutMode === 'inspector' ? 1 : getWebSectionColumns(viewportWidth);
   const useWebSectionColumns = Platform.OS === 'web' && webSectionColumns > 1;
   const webSectionLayout = useMemo(
     () =>

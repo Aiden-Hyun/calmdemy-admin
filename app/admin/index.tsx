@@ -1,6 +1,15 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Alert, Platform } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Pressable,
+  Alert,
+  Platform,
+  useWindowDimensions,
+} from 'react-native';
 import { useRouter } from 'expo-router';
+import { useAuth } from '@core/providers/contexts/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@core/providers/contexts/ThemeContext';
 import {
@@ -26,11 +35,15 @@ import { DraftsSection } from '@features/admin/components/DraftsSection';
 import { JobList } from '@features/admin/components/JobList';
 import { FactoryMetrics } from '@features/admin/types';
 import { WorkerLogsPanel } from '@features/admin/components/WorkerLogsPanel';
+import { AdminShell } from '@features/admin/components/shell/AdminShell';
+import { SidebarNavKey } from '@features/admin/components/shell/Sidebar';
 import {
   publishCompletedJob,
   requestCourseThumbnailGeneration,
 } from '@features/admin/data/adminRepository';
 import { ContentJob } from '@features/admin/types';
+
+const WIDE_BREAKPOINT = 1200;
 
 export default function AdminDashboard() {
   const router = useRouter();
@@ -235,6 +248,73 @@ export default function AdminDashboard() {
       },
     ]);
   };
+
+  const { width: viewportWidth } = useWindowDimensions();
+  const isWideWeb = Platform.OS === 'web' && viewportWidth >= WIDE_BREAKPOINT;
+  const { logout } = useAuth();
+
+  const handleSidebarNavigate = (key: SidebarNavKey) => {
+    if (key === 'content') router.push('/admin/content');
+    else if (key === 'reports') router.push('/admin/content/reports');
+    // 'dashboard' is the current screen — no-op
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await logout();
+    } finally {
+      router.replace('/login');
+    }
+  };
+
+  if (isWideWeb) {
+    return (
+      <AdminShell
+        jobs={jobs}
+        isJobsLoading={isLoading}
+        activeWorkersByJobId={workersByJobId}
+        filter={filter}
+        drafts={drafts}
+        stacks={stacks}
+        pendingCount={pendingCount}
+        activeCount={activeCount}
+        pausedCount={pausedCount}
+        completedCount={completedCount}
+        localState={localState}
+        autoMode={autoMode}
+        idleTimeoutMin={idleTimeoutMin}
+        controlStateLabel={controlStateLabel}
+        lastAction={lastAction}
+        lastError={lastError}
+        controlsDisabled={controlsDisabled}
+        restartInProgress={restartInProgress}
+        overviewOpen={overviewOpen}
+        logsOpen={logsOpen}
+        openReportsCount={openReportsCount}
+        onToggleOverview={() => setOverviewOpen((prev) => !prev)}
+        onToggleLogs={() => setLogsOpen((prev) => !prev)}
+        onAutoModeChange={handleAutoModeChange}
+        onStartNow={handleStartNow}
+        onStopNow={handleStopNow}
+        onRestart={handleRestart}
+        onIdleTimeoutChange={setLocalIdleTimeout}
+        onFilterChange={setFilter}
+        onJobPublish={(job) => {
+          void handlePublishJob(job);
+        }}
+        onJobGenerateThumbnail={(job) => {
+          void handleGenerateThumbnailJob(job);
+        }}
+        onDraftSelect={(draftId) =>
+          router.push({ pathname: '/admin/create', params: { draftId } })
+        }
+        onDraftDelete={deleteDraft}
+        onNavigate={handleSidebarNavigate}
+        onCreate={() => router.push('/admin/create')}
+        onSignOut={handleSignOut}
+      />
+    );
+  }
 
   return (
     <View style={styles.container}>

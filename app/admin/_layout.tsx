@@ -1,14 +1,16 @@
 import React from 'react';
-import { Stack, Redirect, useRouter } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { View, Text, ActivityIndicator, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@core/providers/contexts/ThemeContext';
+import { useAuth } from '@core/providers/contexts/AuthContext';
 import { useAdminAuth } from '@features/admin/hooks/useAdminAuth';
 
 export default function AdminLayout() {
   const { theme } = useTheme();
   const router = useRouter();
   const { isAdmin, isLoading } = useAdminAuth();
+  const { logout } = useAuth();
 
   if (isLoading) {
     return (
@@ -22,7 +24,29 @@ export default function AdminLayout() {
   }
 
   if (!isAdmin) {
-    return <Redirect href="/" />;
+    return (
+      <View style={[styles.center, { backgroundColor: theme.colors.background }]}>
+        <Ionicons name="lock-closed-outline" size={48} color={theme.colors.textMuted} />
+        <Text style={[styles.deniedTitle, { color: theme.colors.text }]}>
+          Admin access only
+        </Text>
+        <Text style={[styles.loadingText, { color: theme.colors.textMuted }]}>
+          This account is not authorized to use Calmdemy Admin.
+        </Text>
+        <Pressable
+          onPress={async () => {
+            try {
+              await logout();
+            } finally {
+              router.replace('/login');
+            }
+          }}
+          style={[styles.logoutButton, { backgroundColor: theme.colors.primary }]}
+        >
+          <Text style={styles.logoutText}>Sign out</Text>
+        </Pressable>
+      </View>
+    );
   }
 
   return (
@@ -102,5 +126,22 @@ const styles = StyleSheet.create({
   loadingText: {
     fontSize: 14,
     fontFamily: 'DMSans-Regular',
+    textAlign: 'center',
+    paddingHorizontal: 32,
+  },
+  deniedTitle: {
+    fontSize: 20,
+    fontFamily: 'DMSans-SemiBold',
+  },
+  logoutButton: {
+    marginTop: 8,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 24,
+  },
+  logoutText: {
+    color: '#fff',
+    fontFamily: 'DMSans-SemiBold',
+    fontSize: 14,
   },
 });

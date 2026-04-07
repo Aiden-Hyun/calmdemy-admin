@@ -1,3 +1,17 @@
+/**
+ * Job list filter bar with predefined status options.
+ *
+ * DESIGN PATTERN:
+ * - Filter bank: Horizontal chip buttons for common status filters
+ * - Single selection: Only one filter active at a time
+ *
+ * USAGE:
+ * ```tsx
+ * const [filter, setFilter] = useState<JobStatus | undefined>();
+ * <FiltersRow selectedFilter={filter} onFilterChange={setFilter} />
+ * ```
+ */
+
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { useTheme } from '@core/providers/contexts/ThemeContext';
@@ -19,6 +33,10 @@ interface FiltersRowProps {
   onFilterChange: (next: JobStatus | undefined) => void;
 }
 
+/**
+ * Render horizontal row of filter chips.
+ * Tapping a chip updates the parent's filter selection.
+ */
 export function FiltersRow({ selectedFilter, onFilterChange }: FiltersRowProps) {
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);

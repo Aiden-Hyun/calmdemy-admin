@@ -1,3 +1,29 @@
+/**
+ * ARCHITECTURAL ROLE:
+ * Data access layer for content reports and moderation workflows. Reads from content_reports Firestore
+ * collection and orchestrates repair action availability based on factory job history.
+ *
+ * DESIGN PATTERNS:
+ * - **Enumeration Translation**: REPORT_COLLECTION_BY_CONTENT_TYPE maps report content_type strings
+ *   (backend naming) to ContentManagerCollection types (admin UI naming). Decouples schema from presentation.
+ * - **Enrichment Pipeline**: enrichSupportedReports() adds detail metadata (title, identifier, thumbnail)
+ *   to reports that reference supported content. Uses detail cache to avoid redundant lookups.
+ * - **Repair Action Strategy**: getContentManagerRepairActionAvailability() implements capability-based
+ *   authorization: checks if a repair job exists, then determines which repair actions are allowed
+ *   (audio regen, script regen, thumbnail gen) based on content type and job history.
+ * - **Memoization**: Detail cache within enrichSupportedReports() prevents N+1 queries for items with multiple reports.
+ *
+ * KEY OPERATIONS:
+ * - getContentManagerReports(): List all reports (moderation inbox)
+ * - getContentManagerReportsForItem(): List reports for a single item (detail view sidebar)
+ * - getOpenContentReportsCount(): Count of unresolved reports (badge on main nav)
+ * - getContentManagerRepairActionAvailability(): Determine which repair actions admin can trigger
+ *
+ * CONSUMERS:
+ * - useContentManagerReportsInbox hook (reports screen, badge counter)
+ * - useContentManagerDetail hook (detail view, repair UI)
+ */
+
 import {
   Timestamp,
   collection,
@@ -25,6 +51,11 @@ import {
   ContentManagerReportSummary,
 } from '../types';
 
+/**
+ * Maps report backend content_type strings to admin collection types.
+ * Report schema uses different naming (e.g., "guided_meditation" singular) than collection names.
+ * Not all content types have supported reports; unsupported ones resolve to null.
+ */
 const REPORT_COLLECTION_BY_CONTENT_TYPE: Record<string, ContentManagerCollection> = {
   guided_meditation: 'guided_meditations',
   sleep_meditation: 'sleep_meditations',
@@ -77,6 +108,27 @@ export function getReportContentTypeForCollection(
   }
 }
 
+/**
+ * Enriches reports with detail metadata: title, identifier, thumbnail URL, type label.
+ * Supports the UI pattern of showing the referenced content's info in the report card.
+ *
+ * OPTIMIZATION:
+ * - Uses local memoization cache to avoid fetching the same item multiple times
+ * - If 10 reports reference the same course session, detail is loaded once
+ * - Cache scoped to this function call (not shared across calls)
+ *
+ * GRACEFUL DEGRADATION:
+ * - If item doesn't exist (deleted content, orphaned report), returns report as-is without title/identifier
+ * - UI handles missing fields gracefully (shows contentId instead of contentTitle)
+ * - Report remains useful even if referenced content is gone (allows admin to clean up)
+ *
+ * UNSUPPORTED CONTENT:
+ * - If report.contentCollection is null (unsupported report type), skips enrichment
+ * - Such reports remain marked isSupported=false; admin can view but not navigate to content
+ *
+ * @param reports - Reports with basic info (ID, status, category); may lack title/identifier
+ * @returns Promise resolving to same reports with title/identifier/thumbnail populated where available
+ */
 async function enrichSupportedReports(
   reports: ContentManagerReportSummary[]
 ): Promise<ContentManagerReportSummary[]> {
@@ -200,6 +252,48 @@ export async function getOpenContentReportsCount(): Promise<number> {
   }, 0);
 }
 
+/**
+ * Determines which "repair" actions (regenerate audio, regenerate thumbnail, etc.) are available
+ * for a content item. This is a capability-based authorization check: what repair jobs can the
+ * factory system run for this content?
+ *
+ * ARCHITECTURE:
+ * - Implements a "Query API" pattern: client asks "what can I do?" backend answers with capabilities.
+ * - Different content types have different repair capabilities (courses vs. single items).
+ * - Requires a completed factory job to enable repair actions (job.id used to spawn new regen tasks).
+ * - If no job exists, user can still open the factory UI but can't trigger immediate regeneration.
+ *
+ * CONTENT TYPE STRATEGIES:
+ *
+ * 1. COURSE SESSIONS:
+ *    - canRegenerateAudioOnly: YES (requires session code for targeting specific session)
+ *    - canRegenerateScriptAndAudio: YES (requires session code)
+ *    - canGenerateThumbnail: NO (course sessions inherit parent course thumbnail)
+ *    - Requires: course ID from relations, session code
+ *
+ * 2. COURSES:
+ *    - canRegenerateAudioOnly: NO (audio is per-session, not per-course)
+ *    - canRegenerateScriptAndAudio: NO (same reason)
+ *    - canGenerateThumbnail: YES (course has standalone thumbnail)
+ *    - Requires: course ID
+ *
+ * 3. OTHER CONTENT (meditations, albums, etc.):
+ *    - canGenerateThumbnail: YES (all these have image metadata)
+ *    - canRegenerateAudioOnly: NO (not a course structure)
+ *    - canRegenerateScriptAndAudio: NO (same reason)
+ *    - Requires: content ID
+ *
+ * 4. UNSUPPORTED (breathing exercises, meditation programs):
+ *    - Returns null: no repair actions available for these content types
+ *
+ * JOB LOOKUP:
+ * - Finds latest completed factory job for this content
+ * - Different lookups for course vs. single content (admin repo has specialized functions)
+ * - If no job exists, message explains why (user may need to contact content team to create initial job)
+ *
+ * @param item - Fully loaded detail object with collection type and relations
+ * @returns Capability object specifying which actions are enabled, or null if unsupported
+ */
 export async function getContentManagerRepairActionAvailability(
   item: ContentManagerItemDetail
 ): Promise<ContentManagerRepairActionAvailability | null> {

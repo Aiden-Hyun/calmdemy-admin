@@ -1,3 +1,23 @@
+/**
+ * Modal dropdown selector with audio preview support.
+ *
+ * DESIGN PATTERNS:
+ * - Modal presentation: Bottom sheet on mobile, overlay on web
+ * - Audio preview: Users can play sample audio before selecting
+ * - Deferred loading: Previews only load when user opens modal
+ * - Cleanup on close: Audio player stopped and released on modal dismiss
+ *
+ * USAGE (e.g., for TTS model selection):
+ * ```tsx
+ * <Dropdown
+ *   options={ttsModels}
+ *   selectedId={selectedModelId}
+ *   onSelect={(id) => setSelectedModelId(id)}
+ *   placeholder="Choose a model..."
+ * />
+ * ```
+ */
+
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   View,
@@ -45,11 +65,17 @@ export function Dropdown({
   const selectedOption = options.find((o) => o.id === selectedId);
   const displayLabel = selectedOption?.label || placeholder;
 
+  /** Select an option and close the modal. */
   const handleSelect = (id: string) => {
     onSelect(id);
     setOpen(false);
   };
 
+  /**
+   * Play/pause/load audio preview for an option.
+   * First time: load and play. Subsequent: toggle play/pause.
+   * Switching options: stop previous, load and play new.
+   */
   const handlePreview = async (item: DropdownOption) => {
     if (!item.sampleUrl) return;
 
@@ -78,6 +104,7 @@ export function Dropdown({
     }
   };
 
+  /** Cleanup audio resources when modal closes. */
   useEffect(() => {
     if (!open) {
       previewPlayer.stop();
