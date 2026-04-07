@@ -338,6 +338,7 @@ export default function CreateContentScreen() {
         label: v.label,
         description: v.description,
         sampleUrl: v.sampleUrl,
+        sampleAsset: v.sampleAsset,
       })),
     [ttsModel]
   );

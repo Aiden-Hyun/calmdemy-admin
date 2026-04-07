@@ -17,6 +17,7 @@ export interface VoiceOption {
   ttsModel: string; // which TTS model this voice belongs to
   description: string;
   sampleUrl?: string;
+  sampleAsset?: number; // require() result for local samples
 }
 
 // ==================== LLM MODELS ====================
@@ -49,12 +50,14 @@ export const TTS_VOICES: VoiceOption[] = [
     label: 'Declutter Sample (7s)',
     ttsModel: 'qwen3-base',
     description: 'Clone voice from sample_voices/declutter_the_mind_7s.wav',
+    sampleAsset: require('../../../../sample_voices/declutter_the_mind_7s.wav'),
   },
   {
     id: 'laura_qwen',
     label: 'Laura Qwen',
     ttsModel: 'qwen3-base',
     description: 'Clone voice from sample_voices/laura_qwen.wav',
+    sampleAsset: require('../../../../sample_voices/laura_qwen.wav'),
   },
 ];
 

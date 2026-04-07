@@ -19,6 +19,7 @@ export interface DropdownOption {
   label: string;
   description?: string;
   sampleUrl?: string;
+  sampleAsset?: number;
 }
 
 interface DropdownProps {

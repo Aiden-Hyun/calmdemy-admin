@@ -1,12 +1,16 @@
-import React, { useMemo } from 'react';
-import { View, Text, Pressable, StyleSheet } from 'react-native';
+import React, { useMemo, useState, useEffect } from 'react';
+import { View, Text, Pressable, StyleSheet, ActivityIndicator } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@core/providers/contexts/ThemeContext';
+import { useAudioPlayer } from '@shared/hooks/useAudioPlayer';
 import { Theme } from '@/theme';
 
 export interface RadioOption {
   id: string;
   label: string;
   description?: string;
+  sampleUrl?: string;
+  sampleAsset?: number;
 }
 
 interface RadioGroupProps {
@@ -19,10 +23,52 @@ export function RadioGroup({ options, selectedId, onSelect }: RadioGroupProps) {
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
 
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
+  const [previewLoadingId, setPreviewLoadingId] = useState<string | null>(null);
+  const previewPlayer = useAudioPlayer();
+
+  const handlePreview = async (option: RadioOption) => {
+    const source = option.sampleAsset ?? option.sampleUrl;
+    if (!source) return;
+
+    if (previewingId && previewingId !== option.id) {
+      previewPlayer.stop();
+    }
+
+    if (previewingId === option.id) {
+      if (previewPlayer.isPlaying) {
+        previewPlayer.pause();
+      } else {
+        previewPlayer.play();
+      }
+      return;
+    }
+
+    try {
+      setPreviewingId(option.id);
+      setPreviewLoadingId(option.id);
+      await previewPlayer.loadAudio(source);
+      setPreviewLoadingId(null);
+      previewPlayer.play();
+    } catch (err) {
+      console.warn('Failed to preview audio:', err);
+      setPreviewLoadingId(null);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      previewPlayer.stop();
+      previewPlayer.cleanup();
+    };
+  }, []);
+
   return (
     <View style={styles.container}>
       {options.map((option) => {
         const isSelected = option.id === selectedId;
+        const isPreviewing = option.id === previewingId;
+        const isPreviewLoading = option.id === previewLoadingId;
         return (
           <Pressable
             key={option.id}
@@ -49,6 +95,28 @@ export function RadioGroup({ options, selectedId, onSelect }: RadioGroupProps) {
                 </Text>
               ) : null}
             </View>
+            {(option.sampleAsset || option.sampleUrl) ? (
+              <Pressable
+                style={({ pressed }) => [
+                  styles.previewButton,
+                  pressed && { opacity: 0.7 },
+                ]}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  handlePreview(option);
+                }}
+              >
+                {isPreviewLoading ? (
+                  <ActivityIndicator size="small" color={theme.colors.primary} />
+                ) : (
+                  <Ionicons
+                    name={isPreviewing && previewPlayer.isPlaying ? 'pause' : 'play'}
+                    size={16}
+                    color={theme.colors.primary}
+                  />
+                )}
+              </Pressable>
+            ) : null}
           </Pressable>
         );
       })}
@@ -108,5 +176,14 @@ const createStyles = (theme: Theme) =>
       fontSize: 12,
       color: theme.colors.textMuted,
       marginTop: 1,
+    },
+    previewButton: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      backgroundColor: `${theme.colors.primary}15`,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginLeft: 8,
     },
   });
