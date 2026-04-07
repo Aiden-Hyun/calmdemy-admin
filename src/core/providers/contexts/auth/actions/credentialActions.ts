@@ -186,7 +186,7 @@ export function createCredentialActions({
    * The higher-level upgradeAnonymousWithGoogle/Apple/Email methods handle
    * the full flow including credential acquisition and collision detection.
    */
-  const linkAnonymousAccount = async (credential: AuthCredential) => {
+  const linkAnonymousAccount = async (credential: AuthCredential): Promise<void> => {
     const currentUser = requireAnonymousUser();
     await linkWithCredential(currentUser, credential);
   };
@@ -372,7 +372,7 @@ export function createCredentialActions({
    * the originally-intended sign-in. This is the Retry pattern applied to
    * auth — store the failed intent, resolve the blocker, then retry.
    */
-  const signInWithPendingCredential = async (credential: AuthCredential) => {
+  const signInWithPendingCredential = async (credential: AuthCredential): Promise<void> => {
     await signInWithCredential(auth, credential);
   };
 

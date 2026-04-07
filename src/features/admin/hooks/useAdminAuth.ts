@@ -3,12 +3,11 @@
  *
  * ARCHITECTURAL ROLE:
  * Guards the admin UI behind role-based access control.
- * Checks Firebase custom JWT claims (primary source) with Firestore fallback (legacy).
+ * Checks Firebase custom JWT claims (sole source of authorization).
  * Prevents render-after-unmount bugs via abort pattern.
  *
  * DESIGN PATTERNS:
- * - Authorization via JWT custom claims: Server-set, immutable, most reliable
- * - Fallback mechanism: Firestore role check if claims unavailable (backwards compat)
+ * - Authorization via JWT custom claims: Server-set, immutable, only source of truth
  * - Abort pattern: Cleanup function prevents state updates on unmounted components
  * - Async initialization: Async check on first use; caches result in state
  *
@@ -16,7 +15,7 @@
  * 1. Wait for auth system to load (authLoading = false)
  * 2. Skip anonymous users (not admin)
  * 3. Fetch ID token and inspect claims.admin === true
- * 4. If claim missing: Firestore fallback (display-only, not authoritative)
+ * 4. If claim is not true: deny access (no fallback)
  * 5. Handle errors gracefully (default to false)
  * 6. Return isAdmin + isLoading for conditional rendering
  *
@@ -27,7 +26,6 @@
 
 import { useEffect, useState } from 'react';
 import { useAuth } from '@core/providers/contexts/AuthContext';
-import { checkIsAdmin } from '../data/adminRepository';
 
 interface UseAdminAuthResult {
   isAdmin: boolean;
@@ -37,8 +35,7 @@ interface UseAdminAuthResult {
 /**
  * Determine if the authenticated user has admin privileges.
  *
- * PRIMARY: Firebase custom claims (claims.admin = true, set server-side)
- * FALLBACK: Firestore admin role document (display only, not authoritative)
+ * ONLY SOURCE: Firebase custom claims (claims.admin = true, set server-side)
  *
  * The abort pattern (cancelled flag) prevents state updates after unmount.
  */
@@ -63,17 +60,8 @@ export function useAdminAuth(): UseAdminAuthResult {
       try {
         const token = await user.getIdTokenResult(true);
         const claimAdmin = token.claims?.admin === true;
-        if (!claimAdmin) {
-          // Legacy fallback: Firestore role (display-only, not authoritative)
-          const legacy = await checkIsAdmin(user.uid);
-          if (!cancelled) {
-            setIsAdmin(legacy);
-            setIsChecking(false);
-          }
-          return;
-        }
         if (!cancelled) {
-          setIsAdmin(true);
+          setIsAdmin(claimAdmin);
           setIsChecking(false);
         }
       } catch {

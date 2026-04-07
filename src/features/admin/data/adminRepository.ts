@@ -778,11 +778,13 @@ export function subscribeToActiveJobWorkers(
   callback: (workersByJobId: Record<string, ActiveJobWorker[]>) => void,
   jobIds?: string[]
 ): Unsubscribe {
+  let isMounted = true;
   const normalizedJobIds = new Set(
     (jobIds || []).map((jobId) => String(jobId || '').trim()).filter(Boolean)
   );
 
-  return onSnapshot(query(collection(db, 'worker_status'), limit(200)), (snapshot) => {
+  const unsubscribe = onSnapshot(query(collection(db, 'worker_status'), limit(200)), (snapshot) => {
+    if (!isMounted) return;
     const nextWorkersByJobId: Record<string, ActiveJobWorker[]> = {};
 
     snapshot.docs.forEach((docSnapshot) => {
@@ -806,6 +808,11 @@ export function subscribeToActiveJobWorkers(
 
     callback(nextWorkersByJobId);
   });
+
+  return () => {
+    isMounted = false;
+    unsubscribe();
+  };
 }
 
 // ==================== WORKER STACKS STATUS ====================
@@ -813,8 +820,10 @@ export function subscribeToActiveJobWorkers(
 export function subscribeToStacksStatus(
   callback: (stacks: WorkerStackStatus[]) => void
 ): Unsubscribe {
+  let isMounted = true;
   const stacksDoc = doc(db, 'worker_stacks_status', 'local');
-  return onSnapshot(stacksDoc, (docSnapshot) => {
+  const unsubscribe = onSnapshot(stacksDoc, (docSnapshot) => {
+    if (!isMounted) return;
     if (!docSnapshot.exists()) {
       callback([]);
       return;
@@ -835,6 +844,11 @@ export function subscribeToStacksStatus(
     }));
     callback(mapped);
   });
+
+  return () => {
+    isMounted = false;
+    unsubscribe();
+  };
 }
 
 // ==================== WORKER LOG TAILS ====================
@@ -848,8 +862,10 @@ export function subscribeToWorkerLogTail(
     return () => undefined;
   }
 
+  let isMounted = true;
   const tailDoc = doc(db, 'worker_log_tails', stackId);
-  return onSnapshot(tailDoc, (docSnapshot) => {
+  const unsubscribe = onSnapshot(tailDoc, (docSnapshot) => {
+    if (!isMounted) return;
     if (!docSnapshot.exists()) {
       callback(null);
       return;
@@ -879,6 +895,11 @@ export function subscribeToWorkerLogTail(
       updatedAt: data.updatedAt,
     } as WorkerLogTail);
   });
+
+  return () => {
+    isMounted = false;
+    unsubscribe();
+  };
 }
 
 // ==================== WORKER CONTROL ====================
@@ -887,13 +908,20 @@ export function subscribeToWorkerControl(
   workerId: 'local',
   callback: (control: WorkerControl | null) => void
 ): Unsubscribe {
-  return onSnapshot(doc(workerControlCollection, workerId), (docSnapshot) => {
+  let isMounted = true;
+  const unsubscribe = onSnapshot(doc(workerControlCollection, workerId), (docSnapshot) => {
+    if (!isMounted) return;
     if (!docSnapshot.exists()) {
       callback(null);
       return;
     }
     callback({ id: docSnapshot.id, ...docSnapshot.data() } as WorkerControl);
   });
+
+  return () => {
+    isMounted = false;
+    unsubscribe();
+  };
 }
 
 export async function setWorkerDesiredState(

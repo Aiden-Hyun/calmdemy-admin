@@ -66,12 +66,12 @@ export function createSessionActions({
   getAppleCredential,
 }: SessionActionDeps) {
   /** Creates a new Firebase account with email/password credentials. */
-  const signUp = async (email: string, password: string) => {
+  const signUp = async (email: string, password: string): Promise<void> => {
     await createUserWithEmailAndPassword(auth, email, password);
   };
 
   /** Authenticates an existing user with email/password credentials. */
-  const signIn = async (email: string, password: string) => {
+  const signIn = async (email: string, password: string): Promise<void> => {
     await signInWithEmailAndPassword(auth, email, password);
   };
 
@@ -84,7 +84,7 @@ export function createSessionActions({
    * The import alias (firebaseSignInAnonymously) avoids naming collision with
    * this wrapper function.
    */
-  const signInAnonymously = async () => {
+  const signInAnonymously = async (): Promise<void> => {
     await firebaseSignInAnonymously(auth);
   };
 
@@ -96,7 +96,7 @@ export function createSessionActions({
    * than throwing. This keeps the UI simple: it calls signInWithGoogle() and
    * doesn't need to distinguish between "cancelled" and "succeeded".
    */
-  const signInWithGoogle = async () => {
+  const signInWithGoogle = async (): Promise<void> => {
     const googleCredential = await getGoogleCredential();
     if (!googleCredential) {
       return; // User cancelled — soft abort, not an error
@@ -105,7 +105,7 @@ export function createSessionActions({
   };
 
   /** Signs in with Apple. Same two-step pattern as signInWithGoogle. */
-  const signInWithApple = async () => {
+  const signInWithApple = async (): Promise<void> => {
     const appleCredential = await getAppleCredential();
     if (!appleCredential) {
       return; // User cancelled — soft abort
@@ -123,7 +123,7 @@ export function createSessionActions({
    * what you can't, and ensure the critical operation (Firebase signOut) always
    * executes.
    */
-  const logout = async () => {
+  const logout = async (): Promise<void> => {
     try {
       await GoogleSignin.signOut();
     } catch {

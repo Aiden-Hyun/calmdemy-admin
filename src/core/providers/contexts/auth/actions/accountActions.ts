@@ -162,7 +162,7 @@ export function createAccountActions({
    *
    * @param password - Required if the user has an email/password provider linked
    */
-  const deleteAccount = async (password?: string) => {
+  const deleteAccount = async (password?: string): Promise<void> => {
     const currentUser = requireAuthenticatedUser();
     const userId = currentUser.uid;
     const providerIds = currentUser.providerData.map((provider) => provider.providerId);
