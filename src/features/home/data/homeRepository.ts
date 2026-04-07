@@ -93,7 +93,7 @@ export async function getTodayQuote(): Promise<DailyQuote | null> {
 
     if (snapshot.empty) {
       // No scheduled quote for today - fetch all and select random
-      const allQuotesSnapshot = await getDocs(quotesCollection);
+      const allQuotesSnapshot = await getDocs(query(quotesCollection, limit(500)));
       if (allQuotesSnapshot.empty) return null;
 
       const randomIndex = Math.floor(

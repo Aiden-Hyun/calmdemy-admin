@@ -224,14 +224,15 @@ export function createAccountActions({
 
       // --- Phase 7: Delete the Firebase user object (point of no return) ---
       await currentUser.delete();
-    } catch (error: any) {
+    } catch (error: unknown) {
       // --- Error translation: convert Firebase error codes into user-friendly messages ---
       // This is the Adapter pattern for error handling — Firebase's raw error codes
       // are meaningless to end users, so we translate them into actionable messages.
-      if (error?.code === "auth/requires-recent-login") {
+      const firebaseError = error as { code?: string };
+      if (firebaseError?.code === "auth/requires-recent-login") {
         throw new Error("Please sign out and sign back in, then try again.");
       }
-      if (error?.code === "auth/wrong-password") {
+      if (firebaseError?.code === "auth/wrong-password") {
         throw new Error("Incorrect password. Please try again.");
       }
       throw error;

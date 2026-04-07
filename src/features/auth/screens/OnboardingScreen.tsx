@@ -322,11 +322,12 @@ export default function OnboardingScreen() {
         setIsPreparingGuestCheckout(true);
         await signInAnonymously();
         // Once signInAnonymously completes, pendingPackage effect will fire executePurchase
-      } catch (error: any) {
+      } catch (error: unknown) {
         setPendingPackage(null);
+        const errorMessage = error instanceof Error ? error.message : "Please try again in a moment.";
         Alert.alert(
           "Unable to start checkout",
-          error?.message || "Please try again in a moment."
+          errorMessage
         );
       } finally {
         setIsPreparingGuestCheckout(false);

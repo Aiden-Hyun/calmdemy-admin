@@ -258,15 +258,16 @@ export function createCredentialActions({
         data: { userId: currentUser.uid },
         hypothesisId: "C",
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const firebaseError = error as { code?: string; message?: string; name?: string };
       logAuthDebug({
         location: "AuthContext.tsx:upgradeAnonymousWithGoogle:linkError",
         message: "linkWithCredential threw error",
         data: {
-          errorCode: error?.code,
-          errorMessage: error?.message,
-          errorName: error?.name,
-          fullError: JSON.stringify(error, Object.getOwnPropertyNames(error)),
+          errorCode: firebaseError?.code,
+          errorMessage: firebaseError?.message,
+          errorName: firebaseError?.name,
+          fullError: JSON.stringify(error, Object.getOwnPropertyNames(error) as any),
         },
         hypothesisId: "B",
       });
@@ -274,7 +275,7 @@ export function createCredentialActions({
       // --- Collision detection: convert Firebase error into a typed domain exception ---
       // The CredentialCollisionError carries the credential + email so the UI
       // can offer a recovery flow: "Sign in to your existing account, then link."
-      if (error?.code === "auth/credential-already-in-use") {
+      if (firebaseError?.code === "auth/credential-already-in-use") {
         const googleUser = await GoogleSignin.getCurrentUser();
         const email = googleUser?.user?.email || null;
         throw new CredentialCollisionError(credential, "google.com", email);
@@ -327,8 +328,9 @@ export function createCredentialActions({
 
     try {
       await linkWithCredential(currentUser, credential);
-    } catch (error: any) {
-      if (error?.code === "auth/credential-already-in-use") {
+    } catch (error: unknown) {
+      const firebaseError = error as { code?: string };
+      if (firebaseError?.code === "auth/credential-already-in-use") {
         throw new CredentialCollisionError(credential, "apple.com", appleEmail);
       }
       throw error;
@@ -352,8 +354,9 @@ export function createCredentialActions({
 
     try {
       await linkWithCredential(currentUser, credential);
-    } catch (error: any) {
-      if (isCredentialInUseError(error?.code)) {
+    } catch (error: unknown) {
+      const firebaseError = error as { code?: string };
+      if (isCredentialInUseError(firebaseError?.code)) {
         throw new CredentialCollisionError(credential, "password", email);
       }
       throw error;
@@ -416,8 +419,9 @@ export function createCredentialActions({
 
     try {
       await linkWithCredential(currentUser, credential);
-    } catch (error: any) {
-      if (isCredentialInUseError(error?.code)) {
+    } catch (error: unknown) {
+      const firebaseError = error as { code?: string };
+      if (isCredentialInUseError(firebaseError?.code)) {
         throw new CredentialCollisionError(credential, providerType, providerEmail);
       }
       throw error;

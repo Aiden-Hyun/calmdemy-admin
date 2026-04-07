@@ -462,7 +462,7 @@ export async function getUserStats(userId: string) {
  * @throws Error if deletion fails
  */
 export async function deleteUserAccount(userId: string): Promise<void> {
-  console.log(`Starting account deletion for user: ${userId}`);
+  if (__DEV__) console.log(`Starting account deletion for user: ${userId}`);
 
   try {
     // Helper: Delete all docs in collection filtered by userId
@@ -477,7 +477,7 @@ export async function deleteUserAccount(userId: string): Promise<void> {
         deleteDoc(docSnapshot.ref)
       );
       await Promise.all(deletePromises);
-      console.log(`Deleted ${snapshot.docs.length} docs from ${collectionRef.path}`);
+      if (__DEV__) console.log(`Deleted ${snapshot.docs.length} docs from ${collectionRef.path}`);
     };
 
     // Delete user data from all collections
@@ -492,10 +492,10 @@ export async function deleteUserAccount(userId: string): Promise<void> {
     const userDoc = await getDoc(userDocRef);
     if (userDoc.exists()) {
       await deleteDoc(userDocRef);
-      console.log('Deleted user document');
+      if (__DEV__) console.log('Deleted user document');
     }
 
-    console.log('Account deletion complete');
+    if (__DEV__) console.log('Account deletion complete');
   } catch (error) {
     console.error('Error deleting user account data:', error);
     throw error;

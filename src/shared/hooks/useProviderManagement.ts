@@ -218,14 +218,15 @@ export function useProviderManagement(): UseProviderManagementReturn {
    *
    * DEPENDENCY: [] (pure function wrapper)
    */
-  const handleError = useCallback((err: any, action: string) => {
+  const handleError = useCallback((err: unknown, action: string) => {
     if (err instanceof CredentialCollisionError) {
       setCollisionError(err);
       return;
     }
     console.error(`Error ${action}:`, err);
-    setError(err.message || `Failed to ${action}`);
-    Alert.alert("Error", err.message || `Failed to ${action}`);
+    const errorMessage = err instanceof Error ? err.message : `Failed to ${action}`;
+    setError(errorMessage);
+    Alert.alert("Error", errorMessage);
   }, []);
 
   /**
@@ -247,7 +248,7 @@ export function useProviderManagement(): UseProviderManagementReturn {
     try {
       await linkProvider("google.com");
       Alert.alert("Success", "Google account linked successfully!");
-    } catch (err: any) {
+    } catch (err: unknown) {
       handleError(err, "link Google account");
     } finally {
       setIsLoading(false);
@@ -271,7 +272,7 @@ export function useProviderManagement(): UseProviderManagementReturn {
     try {
       await linkProvider("apple.com");
       Alert.alert("Success", "Apple account linked successfully!");
-    } catch (err: any) {
+    } catch (err: unknown) {
       handleError(err, "link Apple account");
     } finally {
       setIsLoading(false);
@@ -299,7 +300,7 @@ export function useProviderManagement(): UseProviderManagementReturn {
       try {
         await linkProvider("password", { email, password });
         Alert.alert("Success", "Email and password linked successfully!");
-      } catch (err: any) {
+      } catch (err: unknown) {
         handleError(err, "link email");
       } finally {
         setIsLoading(false);
@@ -339,7 +340,7 @@ export function useProviderManagement(): UseProviderManagementReturn {
       try {
         await unlinkProvider(providerId);
         Alert.alert("Success", "Sign-in method removed successfully!");
-      } catch (err: any) {
+      } catch (err: unknown) {
         handleError(err, "remove sign-in method");
       } finally {
         setIsLoading(false);
@@ -401,7 +402,7 @@ export function useProviderManagement(): UseProviderManagementReturn {
       await unlinkProvider("google.com");
       await linkProvider("google.com");
       Alert.alert("Success", "Google account switched successfully!");
-    } catch (err: any) {
+    } catch (err: unknown) {
       handleError(err, "switch Google account");
     } finally {
       setIsLoading(false);
@@ -455,7 +456,7 @@ export function useProviderManagement(): UseProviderManagementReturn {
       await unlinkProvider("apple.com");
       await linkProvider("apple.com");
       Alert.alert("Success", "Apple account switched successfully!");
-    } catch (err: any) {
+    } catch (err: unknown) {
       handleError(err, "switch Apple account");
     } finally {
       setIsLoading(false);
@@ -490,7 +491,7 @@ export function useProviderManagement(): UseProviderManagementReturn {
       try {
         await changeEmail(newEmail, password);
         Alert.alert("Success", "Email address updated successfully!");
-      } catch (err: any) {
+      } catch (err: unknown) {
         handleError(err, "change email");
       } finally {
         setIsLoading(false);
@@ -523,7 +524,7 @@ export function useProviderManagement(): UseProviderManagementReturn {
           "Email Sent",
           "Check your inbox for password reset instructions."
         );
-      } catch (err: any) {
+      } catch (err: unknown) {
         // Anti-enumeration: always show same message (don't reveal if email exists)
         Alert.alert(
           "Email Sent",
@@ -564,7 +565,7 @@ export function useProviderManagement(): UseProviderManagementReturn {
     try {
       await signInWithPendingCredential(collisionError.pendingCredential);
       setCollisionError(null);
-    } catch (err: any) {
+    } catch (err: unknown) {
       handleError(err, "sign in");
     } finally {
       setIsLoading(false);

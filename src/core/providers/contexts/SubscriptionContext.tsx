@@ -182,7 +182,7 @@ export function SubscriptionProvider({
       try {
         const loaded = await loadRevenueCat();
         if (!loaded || !Purchases) {
-          console.log("RevenueCat not available, running in demo mode");
+          if (__DEV__) console.log("RevenueCat not available, running in demo mode");
           setIsLoading(false);
           return;
         }
@@ -238,7 +238,7 @@ export function SubscriptionProvider({
 
         // Fetch available offerings (subscription packages)
         await fetchOfferings();
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error("Error initializing RevenueCat:", error);
         setIsLoading(false);
       }
@@ -385,28 +385,31 @@ export function SubscriptionProvider({
       const offerings = await Purchases.getOfferings();
 
       // Debug logging to help diagnose offering issues
-      console.log("[RevenueCat] Offerings response:", {
-        hasOfferings: !!offerings,
-        hasCurrent: !!offerings?.current,
-        currentIdentifier: offerings?.current?.identifier,
-        availablePackagesCount: offerings?.current?.availablePackages?.length || 0,
-        packageIdentifiers: offerings?.current?.availablePackages?.map((p: any) => p.identifier) || [],
-        allOfferingIds: Object.keys(offerings?.all || {}),
-      });
+      if (__DEV__) {
+        console.log("[RevenueCat] Offerings response:", {
+          hasOfferings: !!offerings,
+          hasCurrent: !!offerings?.current,
+          currentIdentifier: offerings?.current?.identifier,
+          availablePackagesCount: offerings?.current?.availablePackages?.length || 0,
+          packageIdentifiers: offerings?.current?.availablePackages?.map((p: any) => p.identifier) || [],
+          allOfferingIds: Object.keys(offerings?.all || {}),
+        });
+      }
 
       if (offerings.current) {
         setCurrentOffering(offerings.current);
       } else if (offerings.all && Object.keys(offerings.all).length > 0) {
         // Fallback: if no "current" offering but others exist, use the first
         const firstOfferingKey = Object.keys(offerings.all)[0];
-        console.log("[RevenueCat] No current offering set, using first available:", firstOfferingKey);
+        if (__DEV__) console.log("[RevenueCat] No current offering set, using first available:", firstOfferingKey);
         setCurrentOffering(offerings.all[firstOfferingKey]);
       } else {
         // No offerings at all — likely a configuration issue on RevenueCat dashboard
-        console.log("[RevenueCat] No offerings available. Check RevenueCat dashboard: ensure products are added to an offering and the offering is set as 'Current'.");
+        if (__DEV__) console.log("[RevenueCat] No offerings available. Check RevenueCat dashboard: ensure products are added to an offering and the offering is set as 'Current'.");
       }
-    } catch (error: any) {
-      console.log("[RevenueCat] Error fetching offerings:", error.message, error.code);
+    } catch (error: unknown) {
+      const revenuecatError = error as { message?: string; code?: string };
+      if (__DEV__) console.log("[RevenueCat] Error fetching offerings:", revenuecatError.message, revenuecatError.code);
     }
   };
 
@@ -448,13 +451,14 @@ export function SubscriptionProvider({
       const hasPremium = typeof newInfo.entitlements.active[PREMIUM_ENTITLEMENT_ID] !== "undefined";
       setIsPremium(hasPremium);
       return hasPremium;
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Only show alert if user didn't cancel (RevenueCat sets userCancelled on manual cancels)
-      if (!error.userCancelled) {
+      const revenuecatError = error as { userCancelled?: boolean; message?: string };
+      if (!revenuecatError.userCancelled) {
         console.error("Error purchasing package:", error);
         Alert.alert(
           "Purchase Failed",
-          error.message || "There was an error processing your purchase. Please try again."
+          revenuecatError.message || "There was an error processing your purchase. Please try again."
         );
       }
       return false;
@@ -497,11 +501,12 @@ export function SubscriptionProvider({
       }
 
       return hasPremium;
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error restoring purchases:", error);
+      const revenuecatError = error as { message?: string };
       Alert.alert(
         "Restore Failed",
-        error.message ||
+        revenuecatError.message ||
           "There was an error restoring your purchases. Please try again."
       );
       return false;
@@ -551,7 +556,7 @@ export function SubscriptionProvider({
           reason: result.reason,
           showRecoveryWizard: result.showRecoveryWizard,
         };
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error("Error restoring purchases with recovery:", error);
         return { success: false, reason: "no_subscription" };
       } finally {

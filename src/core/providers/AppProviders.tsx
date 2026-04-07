@@ -70,9 +70,9 @@ import { QueryProvider } from './QueryProvider';
  * to ensure React executes the effect at the right time.
  */
 function ProviderBreadcrumb({ name, children }: { name: string; children: React.ReactNode }) {
-  console.log(`[Startup] ${name} rendering`);
+  if (__DEV__) console.log(`[Startup] ${name} rendering`);
   useEffect(() => {
-    console.log(`[Startup] ${name} mounted`);
+    if (__DEV__) console.log(`[Startup] ${name} mounted`);
   }, [name]);
   return <>{children}</>;
 }
@@ -88,7 +88,7 @@ function ProviderBreadcrumb({ name, children }: { name: string; children: React.
  * @param children - The app content (likely a navigation component like RootNavigator)
  */
 export function AppProviders({ children }: { children: React.ReactNode }) {
-  console.log('[Startup] AppProviders rendering');
+  if (__DEV__) console.log('[Startup] AppProviders rendering');
   return (
     <ProviderBreadcrumb name="QueryProvider">
       <QueryProvider>

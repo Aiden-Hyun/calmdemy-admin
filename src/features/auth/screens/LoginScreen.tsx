@@ -186,12 +186,13 @@ export default function LoginScreen() {
         await signIn(email, password);
         router.replace('/(tabs)/home');
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Collision: credential exists for a different account
       if (error instanceof CredentialCollisionError) {
         setCollisionError(error);
       } else {
-        Alert.alert("Error", error.message);
+        const errorMessage = error instanceof Error ? error.message : "An error occurred";
+        Alert.alert("Error", errorMessage);
       }
     }
   };
@@ -216,12 +217,15 @@ export default function LoginScreen() {
         await signInWithGoogle();
         router.replace('/(tabs)/home');
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Collision: credential exists for a different account
       if (error instanceof CredentialCollisionError) {
         setCollisionError(error);
-      } else if (error.message && error.message !== "User cancelled") {
-        Alert.alert("Error", error.message);
+      } else {
+        const errorMessage = error instanceof Error ? error.message : "";
+        if (errorMessage && errorMessage !== "User cancelled") {
+          Alert.alert("Error", errorMessage);
+        }
       }
       // User cancelled dialog: stay on current page, no error
     } finally {
@@ -247,12 +251,15 @@ export default function LoginScreen() {
         await signInWithApple();
         router.replace('/(tabs)/home');
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Collision: credential exists for a different account
       if (error instanceof CredentialCollisionError) {
         setCollisionError(error);
-      } else if (error.message && error.message !== "User cancelled") {
-        Alert.alert("Error", error.message);
+      } else {
+        const errorMessage = error instanceof Error ? error.message : "";
+        if (errorMessage && errorMessage !== "User cancelled") {
+          Alert.alert("Error", errorMessage);
+        }
       }
       // User cancelled dialog: stay on current page, no error
     } finally {
@@ -269,8 +276,9 @@ export default function LoginScreen() {
     if (!user) {
       try {
         await signInAnonymously();
-      } catch (error: any) {
-        Alert.alert("Error", error.message);
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "An error occurred";
+        Alert.alert("Error", errorMessage);
         return;
       }
     }
@@ -306,8 +314,9 @@ export default function LoginScreen() {
       setCollisionError(null);
       setShowSwitchConfirm(false);
       router.replace('/(tabs)/home');
-    } catch (error: any) {
-      Alert.alert("Error", error.message || "Failed to sign in");
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to sign in";
+      Alert.alert("Error", errorMessage);
     }
   };
 

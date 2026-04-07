@@ -107,7 +107,7 @@ export function RecoveryWizard({
           );
         }
       }, 500);
-    } catch (error: any) {
+    } catch (error: unknown) {
       Alert.alert("Unable to Sign In", "Please try again or use another method.");
     } finally {
       setIsLoading(false);
@@ -134,7 +134,7 @@ export function RecoveryWizard({
           );
         }
       }, 500);
-    } catch (error: any) {
+    } catch (error: unknown) {
       Alert.alert("Unable to Sign In", "Please try again or use another method.");
     } finally {
       setIsLoading(false);
@@ -166,7 +166,7 @@ export function RecoveryWizard({
           );
         }
       }, 500);
-    } catch (error: any) {
+    } catch (error: unknown) {
       Alert.alert("Unable to Sign In", "Please check your credentials and try again.");
     } finally {
       setIsLoading(false);

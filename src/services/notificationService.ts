@@ -133,7 +133,7 @@ export class NotificationService {
       if (status !== 'granted') {
         // Non-critical: notifications will fail silently if user denied
         // App continues to function; just without notifications
-        console.log('Notification permissions not granted');
+        if (__DEV__) console.log('Notification permissions not granted');
       }
     }
   }

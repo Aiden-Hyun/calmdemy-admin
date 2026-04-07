@@ -33,6 +33,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
   query,
   serverTimestamp,
   setDoc,
@@ -114,7 +115,8 @@ export async function getCompletedContentIds(
     const q = query(
       completedContentCollection,
       where("user_id", "==", userId),
-      where("content_type", "==", contentType)
+      where("content_type", "==", contentType),
+      limit(5000)
     );
     const snapshot = await getDocs(q);
 

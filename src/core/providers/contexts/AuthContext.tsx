@@ -69,7 +69,7 @@ export { CredentialCollisionError } from "@core/providers/contexts/auth/types";
  * but necessary because the Google SDK requires one-time global configuration.
  * We log startup progress here for debugging provider mounting order.
  */
-console.log('[Startup] AuthContext module loaded — configuring GoogleSignin');
+if (__DEV__) console.log('[Startup] AuthContext module loaded — configuring GoogleSignin');
 if (!env.google.webClientId && !env.google.iosClientId) {
   console.warn("[Startup] Google Sign-In client IDs missing; check environment variables");
 }
@@ -78,7 +78,7 @@ try {
     webClientId: env.google.webClientId,
     iosClientId: env.google.iosClientId,
   });
-  console.log('[Startup] GoogleSignin.configure() succeeded');
+  if (__DEV__) console.log('[Startup] GoogleSignin.configure() succeeded');
 } catch (e) {
   console.error('[Startup] GoogleSignin.configure() threw:', e);
 }
@@ -96,7 +96,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
  * @param children - React components that use useAuth within this subtree
  */
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  console.log('[Startup] AuthProvider rendering');
+  if (__DEV__) console.log('[Startup] AuthProvider rendering');
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [isAppleSignInAvailable, setIsAppleSignInAvailable] = useState(false);
@@ -113,13 +113,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    * so we skip the check.
    */
   useEffect(() => {
-    console.log('[Startup] AuthProvider mounted — checking Apple auth availability');
+    if (__DEV__) console.log('[Startup] AuthProvider mounted — checking Apple auth availability');
     let isMounted = true;
 
     if (Platform.OS === "ios") {
       AppleAuthentication.isAvailableAsync()
         .then((available) => {
-          console.log('[Startup] Apple auth available:', available);
+          if (__DEV__) console.log('[Startup] Apple auth available:', available);
           if (isMounted) {
             setIsAppleSignInAvailable(available);
           }
@@ -153,14 +153,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    * of the provider (from mount to unmount).
    */
   useEffect(() => {
-    console.log('[Startup] Subscribing to Firebase onAuthStateChanged');
+    if (__DEV__) console.log('[Startup] Subscribing to Firebase onAuthStateChanged');
     try {
       const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
-        console.log('[Startup] onAuthStateChanged fired — user:', nextUser ? nextUser.uid : 'null');
+        if (__DEV__) console.log('[Startup] onAuthStateChanged fired — user:', nextUser ? nextUser.uid : 'null');
         setUser(nextUser);
         setLoading(false);
       });
-      console.log('[Startup] Firebase auth subscription active');
+      if (__DEV__) console.log('[Startup] Firebase auth subscription active');
       return unsubscribe;
     } catch (e) {
       console.error('[Startup] onAuthStateChanged threw:', e);

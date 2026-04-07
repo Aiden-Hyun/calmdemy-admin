@@ -70,7 +70,7 @@ async function loadRevenueCat(): Promise<boolean> {
     Purchases = module.default;
     return true;
   } catch (error) {
-    console.warn("[AuthSubscriptionManager] RevenueCat not available:", error);
+    if (__DEV__) console.warn("[AuthSubscriptionManager] RevenueCat not available:", error);
     return false;
   }
 }
@@ -136,16 +136,18 @@ export async function syncRevenueCatIdentity(
 ): Promise<CustomerInfo | null> {
   const loaded = await loadRevenueCat();
   if (!loaded || !Purchases) {
-    console.log("[AuthSubscriptionManager] RevenueCat not available for sync");
+    if (__DEV__) console.log("[AuthSubscriptionManager] RevenueCat not available for sync");
     return null;
   }
 
   try {
     const { customerInfo } = await Purchases.logIn(firebaseUid);
-    console.log(
-      "[AuthSubscriptionManager] Synced RevenueCat identity for UID:",
-      firebaseUid
-    );
+    if (__DEV__) {
+      console.log(
+        "[AuthSubscriptionManager] Synced RevenueCat identity for UID:",
+        firebaseUid
+      );
+    }
     return customerInfo;
   } catch (error) {
     console.error("[AuthSubscriptionManager] Error syncing RevenueCat:", error);
@@ -177,7 +179,7 @@ export async function resetRevenueCatIdentity(): Promise<void> {
 
   try {
     await Purchases.logOut();
-    console.log("[AuthSubscriptionManager] Reset RevenueCat identity");
+    if (__DEV__) console.log("[AuthSubscriptionManager] Reset RevenueCat identity");
   } catch (error) {
     console.error(
       "[AuthSubscriptionManager] Error resetting RevenueCat:",

@@ -129,14 +129,17 @@ export function AccountPromptModal({
         "Your subscription is now linked to your Google account."
       );
       onClose();
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Defensive error handling: check the specific error type first
       // CredentialCollisionError is recoverable — route to the collision modal
       if (error instanceof CredentialCollisionError) {
         setCollisionError(error);
-      } else if (error.message !== "User cancelled") {
-        // Guard clause: suppress alerts for intentional user cancellations
-        Alert.alert("Error", error.message || "Failed to link Google account");
+      } else {
+        const errorMessage = error instanceof Error ? error.message : "Failed to link Google account";
+        if (errorMessage !== "User cancelled") {
+          // Guard clause: suppress alerts for intentional user cancellations
+          Alert.alert("Error", errorMessage);
+        }
       }
     } finally {
       setIsLoading(false);
@@ -158,11 +161,14 @@ export function AccountPromptModal({
         "Your subscription is now linked to your Apple account."
       );
       onClose();
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (error instanceof CredentialCollisionError) {
         setCollisionError(error);
-      } else if (error.message !== "User cancelled") {
-        Alert.alert("Error", error.message || "Failed to link Apple account");
+      } else {
+        const errorMessage = error instanceof Error ? error.message : "Failed to link Apple account";
+        if (errorMessage !== "User cancelled") {
+          Alert.alert("Error", errorMessage);
+        }
       }
     } finally {
       setIsLoading(false);
@@ -196,8 +202,9 @@ export function AccountPromptModal({
       await signInWithPendingCredential(collisionError.pendingCredential);
       setCollisionError(null);
       onClose();
-    } catch (error: any) {
-      Alert.alert("Error", error.message || "Failed to sign in");
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to sign in";
+      Alert.alert("Error", errorMessage);
     }
   };
 

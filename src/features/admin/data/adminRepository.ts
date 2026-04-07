@@ -676,7 +676,8 @@ export function subscribeToChildJobs(
   const q = query(
     jobsCollection,
     where('parentJobId', '==', parentJobId),
-    orderBy('createdAt', 'asc')
+    orderBy('createdAt', 'asc'),
+    limit(100)
   );
 
   return onSnapshot(q, (snapshot) => {
@@ -781,7 +782,7 @@ export function subscribeToActiveJobWorkers(
     (jobIds || []).map((jobId) => String(jobId || '').trim()).filter(Boolean)
   );
 
-  return onSnapshot(collection(db, 'worker_status'), (snapshot) => {
+  return onSnapshot(query(collection(db, 'worker_status'), limit(200)), (snapshot) => {
     const nextWorkersByJobId: Record<string, ActiveJobWorker[]> = {};
 
     snapshot.docs.forEach((docSnapshot) => {

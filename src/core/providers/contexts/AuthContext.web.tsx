@@ -208,8 +208,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const credential = EmailAuthProvider.credential(email, password);
       try {
         await linkWithCredential(requireAnonymousUser(), credential);
-      } catch (error: any) {
-        if (error?.code === 'auth/credential-already-in-use') {
+      } catch (error: unknown) {
+        const firebaseError = error as { code?: string };
+        if (firebaseError?.code === 'auth/credential-already-in-use') {
           throw new CredentialCollisionError(credential, 'password', email);
         }
         throw error;
@@ -352,11 +353,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await deleteUserAccount(userId);
       await deleteAllDownloads();
       await currentUser.delete();
-    } catch (error: any) {
-      if (error?.code === 'auth/requires-recent-login') {
+    } catch (error: unknown) {
+      const firebaseError = error as { code?: string };
+      if (firebaseError?.code === 'auth/requires-recent-login') {
         throw new Error('Please sign out and sign back in, then try again.');
       }
-      if (error?.code === 'auth/wrong-password') {
+      if (firebaseError?.code === 'auth/wrong-password') {
         throw new Error('Incorrect password. Please try again.');
       }
       throw error;
