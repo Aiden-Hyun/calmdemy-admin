@@ -54,12 +54,12 @@ export const AVAILABLE_BACKENDS: JobBackend[] = ['local', 'api'];
 
 export const BACKEND_LABELS: Record<JobBackend, string> = {
   local: 'Local',
-  api: 'Gemini API',
+  api: 'API',
 };
 
 export const BACKEND_DESCRIPTIONS: Record<JobBackend, string> = {
-  local: 'Runs on your Mac (Ollama must be running)',
-  api: 'Uses Gemini API (free tier)',
+  local: 'Runs on your Mac (LM Studio / Qwen3)',
+  api: 'Uses remote API',
 };
 
 // ==================== CONTENT TYPES ====================

@@ -12,7 +12,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@core/providers/contexts/ThemeContext';
 import { Dropdown, DropdownOption } from './Dropdown';
-import { FactoryContentType, BACKEND_LABELS, SubjectLevelCounts } from '../types';
+import { RadioGroup } from './RadioGroup';
+import { FactoryContentType, SubjectLevelCounts } from '../types';
 import { Theme } from '@/theme';
 
 type Props = {
@@ -120,7 +121,7 @@ export function CreateContentForm(props: Props) {
 
       {/* Content Type */}
       <Text style={styles.sectionTitle}>Content Type</Text>
-      <Dropdown
+      <RadioGroup
         options={props.contentTypeOptions}
         selectedId={props.contentType}
         onSelect={(id) => props.onContentTypeChange(id as FactoryContentType)}
@@ -163,14 +164,14 @@ export function CreateContentForm(props: Props) {
           />
 
           <Text style={styles.sectionTitle}>Target Audience</Text>
-          <Dropdown
+          <RadioGroup
             options={props.audienceOptions}
             selectedId={props.targetAudience}
             onSelect={(id) => props.onTargetAudienceChange(String(id))}
           />
 
           <Text style={styles.sectionTitle}>Tone</Text>
-          <Dropdown
+          <RadioGroup
             options={props.toneOptions}
             selectedId={props.tone}
             onSelect={(id) => props.onToneChange(String(id))}
@@ -243,7 +244,7 @@ export function CreateContentForm(props: Props) {
       {isSingleContent && (
         <>
           <Text style={styles.sectionTitle}>Duration</Text>
-          <Dropdown
+          <RadioGroup
             options={props.durationOptions}
             selectedId={String(props.duration)}
             onSelect={(id) => props.onDurationChange(Number(id))}
@@ -270,7 +271,7 @@ export function CreateContentForm(props: Props) {
           />
 
           <Text style={styles.sectionTitle}>Difficulty</Text>
-          <Dropdown
+          <RadioGroup
             options={props.difficultyOptions}
             selectedId={props.difficulty}
             onSelect={(id) => props.onDifficultyChange(String(id))}
@@ -370,57 +371,15 @@ export function CreateContentForm(props: Props) {
 
       {/* Model selection */}
       <View style={styles.divider} />
-      <Text style={styles.sectionTitle}>LLM Backend</Text>
-      <View style={styles.segmentRow}>
-        {['local', 'api'].map((backend) => (
-          <Pressable
-            key={backend}
-            style={[
-              styles.segment,
-              props.llmBackend === backend && styles.segmentActive,
-            ]}
-            onPress={() => props.onLLMBackendChange(backend)}
-          >
-            <Text
-              style={[
-                styles.segmentText,
-                props.llmBackend === backend && styles.segmentTextActive,
-              ]}
-            >
-              {BACKEND_LABELS[backend as keyof typeof BACKEND_LABELS] || backend}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-      <Dropdown
+      <Text style={styles.sectionTitle}>LLM Model</Text>
+      <RadioGroup
         options={props.llmModelOptions}
         selectedId={props.llmModel}
         onSelect={(id) => props.onLLMModelChange(String(id))}
       />
 
-      <Text style={styles.sectionTitle}>TTS Backend</Text>
-      <View style={styles.segmentRow}>
-        {['local', 'api'].map((backend) => (
-          <Pressable
-            key={backend}
-            style={[
-              styles.segment,
-              props.ttsBackend === backend && styles.segmentActive,
-            ]}
-            onPress={() => props.onTTSBackendChange(backend)}
-          >
-            <Text
-              style={[
-                styles.segmentText,
-                props.ttsBackend === backend && styles.segmentTextActive,
-              ]}
-            >
-              {BACKEND_LABELS[backend as keyof typeof BACKEND_LABELS] || backend}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-      <Dropdown
+      <Text style={styles.sectionTitle}>TTS Model</Text>
+      <RadioGroup
         options={props.ttsModelOptions}
         selectedId={props.ttsModel}
         onSelect={(id) => props.onTTSModelChange(String(id))}
@@ -430,7 +389,7 @@ export function CreateContentForm(props: Props) {
       {props.voiceOptions.length > 0 && (
         <>
           <Text style={styles.sectionTitle}>Voice</Text>
-          <Dropdown
+          <RadioGroup
             options={props.voiceOptions}
             selectedId={props.ttsVoice}
             onSelect={props.onTTSVoiceChange}
@@ -496,6 +455,9 @@ const createStyles = (theme: Theme) =>
     },
     content: {
       padding: 20,
+      maxWidth: 600,
+      width: '100%',
+      alignSelf: 'center',
     },
     sectionHeader: {
       fontFamily: 'DMSans-Bold',
