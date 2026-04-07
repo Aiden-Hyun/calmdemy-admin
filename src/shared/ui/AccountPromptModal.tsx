@@ -46,7 +46,6 @@ import {
   View,
   Text,
   StyleSheet,
-  Modal,
   Pressable,
   ActivityIndicator,
   Alert,
@@ -54,10 +53,10 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "@core/providers/contexts/ThemeContext";
 import { useAuth, CredentialCollisionError } from "@core/providers/contexts/AuthContext";
 import { Theme } from "@/theme";
+import { ModalFrame } from "./ModalFrame";
 import { CredentialCollisionModal } from "./CredentialCollisionModal";
 import { AccountSwitchWarning } from "./AccountSwitchWarning";
 
@@ -84,7 +83,6 @@ export function AccountPromptModal({
   onClose,
 }: AccountPromptModalProps) {
   const { theme, isDark } = useTheme();
-  const insets = useSafeAreaInsets();
   // useMemo memoizes the StyleSheet object to prevent unnecessary recalculations
   // on every render. The dependency array [theme, isDark] ensures styles only
   // regenerate when the theme or dark mode setting actually changes.
@@ -227,111 +225,104 @@ export function AccountPromptModal({
   return (
     <>
       {/* --- Main Modal: Sign-in buttons (hidden when collision error exists) --- */}
-      <Modal
+      <ModalFrame
         visible={visible && !collisionError}
-        transparent
-        animationType="fade"
-        onRequestClose={onClose}
+        onDismiss={onClose}
+        showCloseButton={false}
       >
-        <View style={styles.overlay}>
-          <View
-            style={[styles.container, { paddingBottom: insets.bottom + 24 }]}
+        {/* Branded icon header with gradient background */}
+        <LinearGradient
+          colors={[theme.colors.primary, theme.colors.primaryDark]}
+          style={styles.iconContainer}
+        >
+          <Ionicons name="shield-checkmark-outline" size={32} color="#fff" />
+        </LinearGradient>
+
+        <Text style={styles.title}>Secure Your Subscription</Text>
+        <Text style={styles.description}>
+          Link an account to keep your subscription safe and sync your
+          favorites across devices.
+        </Text>
+
+        {/* --- Platform-specific rendering: Apple Sign-In only on iOS --- */}
+        {/* Strategy Pattern: runtime capability check. If Apple Sign-In is not
+            available on this device (e.g., iOS simulator, older OS), this
+            Pressable is not rendered at all. */}
+        {Platform.OS === "ios" && isAppleSignInAvailable && (
+          <Pressable
+            style={({ pressed }) => [
+              styles.providerButton,
+              { backgroundColor: "#000" },
+              pressed && styles.buttonPressed,
+              isLoading && styles.buttonDisabled,
+            ]}
+            onPress={handleAppleLink}
+            disabled={isLoading}
           >
-            {/* Branded icon header with gradient background */}
-            <LinearGradient
-              colors={[theme.colors.primary, theme.colors.primaryDark]}
-              style={styles.iconContainer}
-            >
-              <Ionicons name="shield-checkmark-outline" size={32} color="#fff" />
-            </LinearGradient>
-
-            <Text style={styles.title}>Secure Your Subscription</Text>
-            <Text style={styles.description}>
-              Link an account to keep your subscription safe and sync your
-              favorites across devices.
-            </Text>
-
-            {/* --- Platform-specific rendering: Apple Sign-In only on iOS --- */}
-            {/* Strategy Pattern: runtime capability check. If Apple Sign-In is not
-                available on this device (e.g., iOS simulator, older OS), this
-                Pressable is not rendered at all. */}
-            {Platform.OS === "ios" && isAppleSignInAvailable && (
-              <Pressable
-                style={({ pressed }) => [
-                  styles.providerButton,
-                  { backgroundColor: "#000" },
-                  pressed && styles.buttonPressed,
-                  isLoading && styles.buttonDisabled,
-                ]}
-                onPress={handleAppleLink}
-                disabled={isLoading}
-              >
-                {/* Conditional rendering: show spinner while this provider is loading,
-                    icon + text otherwise. This provides visual feedback that a specific
-                    OAuth provider is in flight. */}
-                {loadingProvider === "apple" ? (
-                  <ActivityIndicator color="#fff" size="small" />
-                ) : (
-                  <>
-                    <Ionicons name="logo-apple" size={20} color="#fff" />
-                    <Text style={styles.providerButtonText}>
-                      Continue with Apple
-                    </Text>
-                  </>
-                )}
-              </Pressable>
+            {/* Conditional rendering: show spinner while this provider is loading,
+                icon + text otherwise. This provides visual feedback that a specific
+                OAuth provider is in flight. */}
+            {loadingProvider === "apple" ? (
+              <ActivityIndicator color="#fff" size="small" />
+            ) : (
+              <>
+                <Ionicons name="logo-apple" size={20} color="#fff" />
+                <Text style={styles.providerButtonText}>
+                  Continue with Apple
+                </Text>
+              </>
             )}
+          </Pressable>
+        )}
 
-            {/* Google Sign-In button (available on all platforms) */}
-            <Pressable
-              style={({ pressed }) => [
-                styles.providerButton,
-                { backgroundColor: "#4285F4" },
-                pressed && styles.buttonPressed,
-                isLoading && styles.buttonDisabled,
-              ]}
-              onPress={handleGoogleLink}
-              disabled={isLoading}
-            >
-              {loadingProvider === "google" ? (
-                <ActivityIndicator color="#fff" size="small" />
-              ) : (
-                <>
-                  <Ionicons name="logo-google" size={20} color="#fff" />
-                  <Text style={styles.providerButtonText}>
-                    Continue with Google
-                  </Text>
-                </>
-              )}
-            </Pressable>
-
-            {/* Escape hatch: user can dismiss without linking */}
-            <Pressable
-              style={({ pressed }) => [
-                styles.secondaryButton,
-                pressed && styles.buttonPressed,
-              ]}
-              onPress={handleContinue}
-              disabled={isLoading}
-            >
-              <Text style={styles.secondaryButtonText}>Maybe later</Text>
-            </Pressable>
-
-            {/* Informational callout: communicates the risk of not linking */}
-            <View style={styles.warningNote}>
-              <Ionicons
-                name="information-circle-outline"
-                size={16}
-                color={theme.colors.warning}
-              />
-              <Text style={styles.warningNoteText}>
-                Without linking, you may lose access if you reinstall the app or
-                switch devices.
+        {/* Google Sign-In button (available on all platforms) */}
+        <Pressable
+          style={({ pressed }) => [
+            styles.providerButton,
+            { backgroundColor: "#4285F4" },
+            pressed && styles.buttonPressed,
+            isLoading && styles.buttonDisabled,
+          ]}
+          onPress={handleGoogleLink}
+          disabled={isLoading}
+        >
+          {loadingProvider === "google" ? (
+            <ActivityIndicator color="#fff" size="small" />
+          ) : (
+            <>
+              <Ionicons name="logo-google" size={20} color="#fff" />
+              <Text style={styles.providerButtonText}>
+                Continue with Google
               </Text>
-            </View>
-          </View>
+            </>
+          )}
+        </Pressable>
+
+        {/* Escape hatch: user can dismiss without linking */}
+        <Pressable
+          style={({ pressed }) => [
+            styles.secondaryButton,
+            pressed && styles.buttonPressed,
+          ]}
+          onPress={handleContinue}
+          disabled={isLoading}
+        >
+          <Text style={styles.secondaryButtonText}>Maybe later</Text>
+        </Pressable>
+
+        {/* Informational callout: communicates the risk of not linking */}
+        <View style={styles.warningNote}>
+          <Ionicons
+            name="information-circle-outline"
+            size={16}
+            color={theme.colors.warning}
+          />
+          <Text style={styles.warningNoteText}>
+            Without linking, you may lose access if you reinstall the app or
+            switch devices.
+          </Text>
         </View>
-      </Modal>
+      </ModalFrame>
 
       {/* --- Modal 2: Credential Collision Handling --- */}
       {/* Conditional rendering: only shown when collisionError is non-null.
@@ -364,22 +355,6 @@ export function AccountPromptModal({
 
 const createStyles = (theme: Theme, isDark: boolean) =>
   StyleSheet.create({
-    overlay: {
-      flex: 1,
-      backgroundColor: "rgba(0,0,0,0.6)",
-      justifyContent: "center",
-      alignItems: "center",
-      padding: 24,
-    },
-    container: {
-      backgroundColor: theme.colors.surface,
-      borderRadius: theme.borderRadius.xl,
-      padding: 32,
-      alignItems: "center",
-      width: "100%",
-      maxWidth: 340,
-      ...theme.shadows.lg,
-    },
     iconContainer: {
       width: 64,
       height: 64,

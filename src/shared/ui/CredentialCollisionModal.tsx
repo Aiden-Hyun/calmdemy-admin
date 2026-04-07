@@ -31,15 +31,14 @@ import {
   View,
   Text,
   StyleSheet,
-  Modal,
   Pressable,
   ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "@core/providers/contexts/ThemeContext";
 import { Theme } from "@/theme";
 import { AuthCredential } from "firebase/auth";
+import { ModalFrame } from "./ModalFrame";
 
 interface CredentialCollisionModalProps {
   visible: boolean;
@@ -98,7 +97,6 @@ export function CredentialCollisionModal({
   onUseDifferentMethod,
 }: CredentialCollisionModalProps) {
   const { theme, isDark } = useTheme();
-  const insets = useSafeAreaInsets();
   const styles = useMemo(() => createStyles(theme, isDark), [theme, isDark]);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -120,132 +118,111 @@ export function CredentialCollisionModal({
   };
 
   return (
-    <Modal
+    <ModalFrame
       visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
+      onDismiss={onClose}
+      showCloseButton={false}
     >
-      <View style={styles.overlay}>
-        <View style={[styles.container, { paddingBottom: insets.bottom + 24 }]}>
-          {/* Icon */}
-          <View style={styles.iconContainer}>
+      {/* Icon */}
+      <View style={styles.iconContainer}>
+        <Ionicons
+          name={providerIcon as any}
+          size={32}
+          color={theme.colors.warning}
+        />
+      </View>
+
+      {/* Title */}
+      <Text style={styles.title}>Account Already Exists</Text>
+
+      {/* Description */}
+      <Text style={styles.description}>
+        {email ? (
+          <>
+            <Text style={styles.emailHighlight}>{email}</Text> is already
+            linked to another Calmdemy account.
+          </>
+        ) : (
+          `This ${providerName} account is already linked to another Calmdemy account.`
+        )}
+      </Text>
+
+      {/* Sign in to other account button */}
+      <Pressable
+        style={({ pressed }) => [
+          styles.primaryButton,
+          pressed && styles.buttonPressed,
+          isLoading && styles.buttonDisabled,
+        ]}
+        onPress={handleSignInToOtherAccount}
+        disabled={isLoading}
+      >
+        {isLoading ? (
+          <ActivityIndicator color="#fff" size="small" />
+        ) : (
+          <>
             <Ionicons
-              name={providerIcon as any}
-              size={32}
-              color={theme.colors.warning}
-            />
-          </View>
-
-          {/* Title */}
-          <Text style={styles.title}>Account Already Exists</Text>
-
-          {/* Description */}
-          <Text style={styles.description}>
-            {email ? (
-              <>
-                <Text style={styles.emailHighlight}>{email}</Text> is already
-                linked to another Calmdemy account.
-              </>
-            ) : (
-              `This ${providerName} account is already linked to another Calmdemy account.`
-            )}
-          </Text>
-
-          {/* Sign in to other account button */}
-          <Pressable
-            style={({ pressed }) => [
-              styles.primaryButton,
-              pressed && styles.buttonPressed,
-              isLoading && styles.buttonDisabled,
-            ]}
-            onPress={handleSignInToOtherAccount}
-            disabled={isLoading}
-          >
-            {isLoading ? (
-              <ActivityIndicator color="#fff" size="small" />
-            ) : (
-              <>
-                <Ionicons
-                  name="log-in-outline"
-                  size={20}
-                  color="#fff"
-                  style={styles.buttonIcon}
-                />
-                <Text style={styles.primaryButtonText}>
-                  Sign in to that account
-                </Text>
-              </>
-            )}
-          </Pressable>
-
-          {/* Use different method button */}
-          <Pressable
-            style={({ pressed }) => [
-              styles.secondaryButton,
-              pressed && styles.buttonPressed,
-            ]}
-            onPress={onUseDifferentMethod}
-            disabled={isLoading}
-          >
-            <Ionicons
-              name="swap-horizontal-outline"
+              name="log-in-outline"
               size={20}
-              color={theme.colors.primary}
+              color="#fff"
               style={styles.buttonIcon}
             />
-            <Text style={styles.secondaryButtonText}>Use a different method</Text>
-          </Pressable>
-
-          {/* Cancel button */}
-          <Pressable
-            style={({ pressed }) => [
-              styles.cancelButton,
-              pressed && styles.buttonPressed,
-            ]}
-            onPress={onClose}
-            disabled={isLoading}
-          >
-            <Text style={styles.cancelButtonText}>Cancel</Text>
-          </Pressable>
-
-          {/* Helper text */}
-          <View style={styles.helperNote}>
-            <Ionicons
-              name="information-circle-outline"
-              size={16}
-              color={theme.colors.textMuted}
-            />
-            <Text style={styles.helperNoteText}>
-              To link this {providerName} account to your current guest subscription, 
-              you'll need to delete the existing account first. Sign in and delete the 
-              account in Settings. Contact support if you need help.
+            <Text style={styles.primaryButtonText}>
+              Sign in to that account
             </Text>
-          </View>
-        </View>
+          </>
+        )}
+      </Pressable>
+
+      {/* Use different method button */}
+      <Pressable
+        style={({ pressed }) => [
+          styles.secondaryButton,
+          pressed && styles.buttonPressed,
+        ]}
+        onPress={onUseDifferentMethod}
+        disabled={isLoading}
+      >
+        <Ionicons
+          name="swap-horizontal-outline"
+          size={20}
+          color={theme.colors.primary}
+          style={styles.buttonIcon}
+        />
+        <Text style={styles.secondaryButtonText}>Use a different method</Text>
+      </Pressable>
+
+      {/* Cancel button */}
+      <Pressable
+        style={({ pressed }) => [
+          styles.cancelButton,
+          pressed && styles.buttonPressed,
+        ]}
+        onPress={onClose}
+        disabled={isLoading}
+      >
+        <Text style={styles.cancelButtonText}>Cancel</Text>
+      </Pressable>
+
+      {/* Helper text */}
+      <View style={styles.helperNote}>
+        <Ionicons
+          name="information-circle-outline"
+          size={16}
+          color={theme.colors.textMuted}
+        />
+        <Text style={styles.helperNoteText}>
+          To link this {providerName} account to your current guest subscription,
+          you'll need to delete the existing account first. Sign in and delete the
+          account in Settings. Contact support if you need help.
+        </Text>
       </View>
-    </Modal>
+    </ModalFrame>
   );
 }
 
 const createStyles = (theme: Theme, isDark: boolean) =>
   StyleSheet.create({
-    overlay: {
-      flex: 1,
-      backgroundColor: "rgba(0,0,0,0.6)",
-      justifyContent: "center",
-      alignItems: "center",
-      padding: 24,
-    },
-    container: {
-      backgroundColor: theme.colors.surface,
-      borderRadius: theme.borderRadius.xl,
-      padding: 32,
-      alignItems: "center",
-      width: "100%",
-      maxWidth: 340,
-      ...theme.shadows.lg,
-    },
     iconContainer: {
       width: 64,
       height: 64,

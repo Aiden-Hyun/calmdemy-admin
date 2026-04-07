@@ -5,19 +5,20 @@
  * Includes optional regeneration UI mode for triggering and monitoring thumbnail jobs.
  *
  * DESIGN PATTERNS:
- * - **ViewModel Pattern**: useContentManagerCatalog hook provides filtered items and state
- * - **State Machine**: Three orthogonal states tracked (isLoading, isRefreshing, error)
- * - **Subscription Management**: subscribeToJob() creates Firestore listeners per regen request;
- *   unsubscribes and timers cleaned up on unmount to prevent memory leaks
- * - **Optional Regeneration Mode**: showRegeneration prop (from route params) toggles visible UI
- *   Allows same component to be browsing mode or regeneration QA mode
+ * - **ViewModel Pattern**: Hooks provide filtered items, reports count, and regeneration state
+ * - **Single Responsibility**: Screen handles UI rendering only; business logic delegated to hooks
+ *   - useContentManagerCatalog: Catalog data, filtering, refresh
+ *   - useContentManagerReportsSummary: Open reports badge
+ *   - useContentRegeneration: Job submission, Firestore subscriptions, status tracking
+ * - **Composition**: Three separate hooks for orthogonal concerns
+ * - **Subscription Management**: useContentRegeneration manages Firestore listeners and cleanup
  *
  * CONSUMERS:
  * - Main navigation: /admin/content
  * - Detail screen can navigate back and trigger refresh
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -31,24 +32,15 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { Unsubscribe } from 'firebase/firestore';
 import { useTheme } from '@core/providers/contexts/ThemeContext';
 import { Theme } from '@/theme';
-import {
-  createThumbnailOnlyJob,
-  getLatestCompletedCourseJobForCourseId,
-  getLatestCompletedJobForContentId,
-  requestContentThumbnailGeneration,
-  requestCourseThumbnailGeneration,
-  subscribeToJob,
-} from '@features/admin/data/adminRepository';
-import { JOB_STATUS_LABELS, JobStatus } from '@features/admin/types';
 import { ContentManagerFilterPills } from '../components/ContentManagerFilterPills';
 import { ContentManagerResultCard } from '../components/ContentManagerResultCard';
 import {
   useContentManagerCatalog,
   useContentManagerReportsSummary,
 } from '../hooks/useContentManager';
+import { useContentRegeneration } from '../hooks/useContentRegeneration';
 import {
   CONTENT_MANAGER_COLLECTION_LABELS,
   CONTENT_MANAGER_COLLECTIONS,
@@ -86,16 +78,21 @@ const THUMBNAIL_OPTIONS = [
 /**
  * Main catalog screen component. Provides search bar, filter pills, and FlatList of items.
  *
- * STATE OVERVIEW:
- * - Hook state: items, filters, isLoading, isRefreshing, error (from useContentManagerCatalog)
- * - Local state: regenStatus Map, submittingIds Set (for thumbnail regen tracking)
- * - Refs: unsubscribesRef (job listeners), dismissTimersRef (status pill auto-dismiss timers)
+ * HOOKS:
+ * - useContentManagerCatalog: Provides filtered items, filters, loading/error states, refresh
+ * - useContentManagerReportsSummary: Provides open reports count badge
+ * - useContentRegeneration: Provides regeneration status, submitting IDs, and regenerate handler
+ *
+ * RESPONSIBILITIES:
+ * - Render search bar and filter pills
+ * - Display filtered list of content items
+ * - Handle regeneration button clicks (delegates to useContentRegeneration)
+ * - Pass regeneration status to ContentManagerResultCard for UI display
  *
  * REGENERATION MODE:
- * - showRegeneration flag determines if item cards show "Regenerate" button
- * - Tracks live job status via subscribeToJob() Firestore listener
- * - Status pills show job progress: pending→generating→completed or error
- * - Auto-dismisses success/error states after 2 seconds
+ * - showRegeneration flag in filters determines if "Regenerate" button is visible
+ * - When filter is active, item cards show regen status via regenerationStatus prop
+ * - Status pills track job progress: pending→generating→completed or error
  */
 export default function ContentManagerScreen() {
   const router = useRouter();
@@ -114,176 +111,7 @@ export default function ContentManagerScreen() {
     setThumbnail,
   } = useContentManagerCatalog();
   const { openCount } = useContentManagerReportsSummary();
-
-  // Track regeneration status per content item
-  const [regenStatus, setRegenStatus] = useState<
-    Map<string, { jobId?: string; status: JobStatus | 'no_job' | 'error' | 'unsupported'; label: string; completedAt?: string }>
-  >(new Map());
-  const [submittingIds, setSubmittingIds] = useState<Set<string>>(new Set());
-  const unsubscribesRef = useRef<Map<string, Unsubscribe>>(new Map());
-  const dismissTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-
-  // Clean up all subscriptions and timers on unmount
-  useEffect(() => {
-    return () => {
-      for (const unsub of unsubscribesRef.current.values()) unsub();
-      for (const timer of dismissTimersRef.current.values()) clearTimeout(timer);
-    };
-  }, []);
-
-  const setStatusWithAutoDismiss = useCallback(
-    (contentId: string, entry: { jobId?: string; status: 'no_job' | 'error' | 'unsupported'; label: string }) => {
-      // Clear any existing subscription/timer
-      unsubscribesRef.current.get(contentId)?.();
-      unsubscribesRef.current.delete(contentId);
-      const existingTimer = dismissTimersRef.current.get(contentId);
-      if (existingTimer) clearTimeout(existingTimer);
-
-      setRegenStatus((prev) => {
-        const next = new Map(prev);
-        next.set(contentId, entry);
-        return next;
-      });
-
-      const timer = setTimeout(() => {
-        setRegenStatus((prev) => {
-          const next = new Map(prev);
-          next.delete(contentId);
-          return next;
-        });
-        dismissTimersRef.current.delete(contentId);
-      }, 8_000);
-      dismissTimersRef.current.set(contentId, timer);
-    },
-    []
-  );
-
-  const startWatchingJob = useCallback((contentId: string, jobId: string) => {
-    // Cancel any existing subscription for this content item
-    unsubscribesRef.current.get(contentId)?.();
-    const existingTimer = dismissTimersRef.current.get(contentId);
-    if (existingTimer) clearTimeout(existingTimer);
-
-    setRegenStatus((prev) => {
-      const next = new Map(prev);
-      next.set(contentId, { jobId, status: 'pending', label: 'Queued' });
-      return next;
-    });
-
-    const unsub = subscribeToJob(jobId, (updatedJob) => {
-      if (!updatedJob) return;
-
-      const status = updatedJob.status;
-      const isTerminal = status === 'completed' || status === 'failed';
-      let completedAt: string | undefined;
-
-      if (status === 'completed' && updatedJob.runEndedAt?.toDate) {
-        completedAt = updatedJob.runEndedAt.toDate().toLocaleTimeString([], {
-          hour: 'numeric',
-          minute: '2-digit',
-        });
-      }
-
-      const label =
-        status === 'completed' && completedAt
-          ? `Finished at ${completedAt}`
-          : status === 'failed'
-            ? updatedJob.error || 'Failed'
-            : status === 'pending'
-              ? 'Queued'
-              : JOB_STATUS_LABELS[status] || status;
-
-      setRegenStatus((prev) => {
-        const next = new Map(prev);
-        next.set(contentId, { jobId, status, label, completedAt });
-        return next;
-      });
-
-      if (isTerminal) {
-        // Unsubscribe once terminal
-        unsubscribesRef.current.get(contentId)?.();
-        unsubscribesRef.current.delete(contentId);
-
-        // Auto-dismiss after 15 seconds
-        const timer = setTimeout(() => {
-          setRegenStatus((prev) => {
-            const next = new Map(prev);
-            next.delete(contentId);
-            return next;
-          });
-          dismissTimersRef.current.delete(contentId);
-        }, 15_000);
-        dismissTimersRef.current.set(contentId, timer);
-      }
-    });
-
-    unsubscribesRef.current.set(contentId, unsub);
-  }, []);
-
-  const NO_THUMBNAIL_COLLECTIONS = ['course_sessions', 'background_sounds', 'breathing_exercises', 'meditation_programs'];
-
-  const handleRegenerate = useCallback(async (item: ContentManagerItemSummary) => {
-    if (NO_THUMBNAIL_COLLECTIONS.includes(item.collection)) {
-      setStatusWithAutoDismiss(item.id, {
-        status: 'unsupported',
-        label: item.collection === 'course_sessions'
-          ? 'Regenerate the parent course instead'
-          : 'This content type does not support thumbnails',
-      });
-      return;
-    }
-
-    setSubmittingIds((prev) => new Set(prev).add(item.id));
-    try {
-      let jobId: string;
-
-      if (item.collection === 'courses') {
-        const job = await getLatestCompletedCourseJobForCourseId(item.id);
-        if (job) {
-          await requestCourseThumbnailGeneration(job);
-          jobId = job.id;
-        } else {
-          // Course with no factory job — create a thumbnail-only job
-          jobId = await createThumbnailOnlyJob({
-            contentId: item.id,
-            collection: item.collection,
-            title: item.title,
-            description: item.description,
-          });
-        }
-      } else {
-        const job = await getLatestCompletedJobForContentId(item.id);
-        if (job) {
-          await requestContentThumbnailGeneration(job);
-          jobId = job.id;
-        } else {
-          // Seeded content with no factory job — create a thumbnail-only job
-          jobId = await createThumbnailOnlyJob({
-            contentId: item.id,
-            collection: item.collection,
-            title: item.title,
-            description: item.description,
-          });
-        }
-      }
-
-      startWatchingJob(item.id, jobId);
-    } catch (regenerateError) {
-      setStatusWithAutoDismiss(item.id, {
-        status: 'error',
-        label:
-          regenerateError instanceof Error
-            ? regenerateError.message
-            : 'Failed to request regeneration',
-      });
-    } finally {
-      setSubmittingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(item.id);
-        return next;
-      });
-    }
-  }, [startWatchingJob, setStatusWithAutoDismiss]);
+  const { regenStatus, submittingIds, handleRegenerate } = useContentRegeneration();
 
   return (
     <View style={styles.screen}>

@@ -40,14 +40,13 @@ import {
   View,
   Text,
   StyleSheet,
-  Modal,
   Pressable,
   ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "@core/providers/contexts/ThemeContext";
 import { Theme } from "@/theme";
+import { ModalFrame } from "./ModalFrame";
 
 interface AccountSwitchConfirmModalProps {
   visible: boolean;
@@ -100,7 +99,6 @@ export function AccountSwitchConfirmModal({
   onCancel,
 }: AccountSwitchConfirmModalProps) {
   const { theme, isDark } = useTheme();
-  const insets = useSafeAreaInsets();
   const styles = useMemo(() => createStyles(theme, isDark), [theme, isDark]);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -127,101 +125,80 @@ export function AccountSwitchConfirmModal({
   };
 
   return (
-    <Modal
+    <ModalFrame
       visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onCancel}
+      onDismiss={onCancel}
+      showCloseButton={false}
     >
-      <View style={styles.overlay}>
-        <View style={[styles.container, { paddingBottom: insets.bottom + 24 }]}>
-          {/* Warning icon with background: uses theme.colors.warning to signal
-              this is a destructive operation */}
-          <View style={styles.iconContainer}>
-            <Ionicons
-              name="swap-horizontal-outline"
-              size={32}
-              color={theme.colors.warning}
-            />
-          </View>
-
-          <Text style={styles.title}>Switch Account?</Text>
-
-          {/* Description: embeds the email in a Text component with
-              emailHighlight style to visually emphasize which account
-              the user will switch to. This improves clarity for destructive ops. */}
-          <Text style={styles.description}>
-            Sign in to{" "}
-            <Text style={styles.emailHighlight}>{displayAccount}</Text>?
-          </Text>
-
-          {/* Warning callout: explains the critical consequence — the subscription
-              does NOT transfer. This is essential UX for a destructive action. */}
-          <View style={styles.warningNote}>
-            <Ionicons
-              name="warning-outline"
-              size={18}
-              color={theme.colors.warning}
-            />
-            <Text style={styles.warningNoteText}>
-              This will replace your current guest account. Your subscription
-              will remain on the guest account and won't transfer.
-            </Text>
-          </View>
-
-          {/* Primary action: colored in warning color to emphasize destructiveness.
-              Disabled while isLoading to prevent double-clicks. */}
-          <Pressable
-            style={({ pressed }) => [
-              styles.primaryButton,
-              pressed && styles.buttonPressed,
-              isLoading && styles.buttonDisabled,
-            ]}
-            onPress={handleConfirm}
-            disabled={isLoading}
-          >
-            {isLoading ? (
-              <ActivityIndicator color="#fff" size="small" />
-            ) : (
-              <Text style={styles.primaryButtonText}>Switch Account</Text>
-            )}
-          </Pressable>
-
-          {/* Escape hatch: secondary button to cancel without side effects */}
-          <Pressable
-            style={({ pressed }) => [
-              styles.cancelButton,
-              pressed && styles.buttonPressed,
-            ]}
-            onPress={onCancel}
-            disabled={isLoading}
-          >
-            <Text style={styles.cancelButtonText}>Cancel</Text>
-          </Pressable>
-        </View>
+      {/* Warning icon with background: uses theme.colors.warning to signal
+          this is a destructive operation */}
+      <View style={styles.iconContainer}>
+        <Ionicons
+          name="swap-horizontal-outline"
+          size={32}
+          color={theme.colors.warning}
+        />
       </View>
-    </Modal>
+
+      <Text style={styles.title}>Switch Account?</Text>
+
+      {/* Description: embeds the email in a Text component with
+          emailHighlight style to visually emphasize which account
+          the user will switch to. This improves clarity for destructive ops. */}
+      <Text style={styles.description}>
+        Sign in to{" "}
+        <Text style={styles.emailHighlight}>{displayAccount}</Text>?
+      </Text>
+
+      {/* Warning callout: explains the critical consequence — the subscription
+          does NOT transfer. This is essential UX for a destructive action. */}
+      <View style={styles.warningNote}>
+        <Ionicons
+          name="warning-outline"
+          size={18}
+          color={theme.colors.warning}
+        />
+        <Text style={styles.warningNoteText}>
+          This will replace your current guest account. Your subscription
+          will remain on the guest account and won't transfer.
+        </Text>
+      </View>
+
+      {/* Primary action: colored in warning color to emphasize destructiveness.
+          Disabled while isLoading to prevent double-clicks. */}
+      <Pressable
+        style={({ pressed }) => [
+          styles.primaryButton,
+          pressed && styles.buttonPressed,
+          isLoading && styles.buttonDisabled,
+        ]}
+        onPress={handleConfirm}
+        disabled={isLoading}
+      >
+        {isLoading ? (
+          <ActivityIndicator color="#fff" size="small" />
+        ) : (
+          <Text style={styles.primaryButtonText}>Switch Account</Text>
+        )}
+      </Pressable>
+
+      {/* Escape hatch: secondary button to cancel without side effects */}
+      <Pressable
+        style={({ pressed }) => [
+          styles.cancelButton,
+          pressed && styles.buttonPressed,
+        ]}
+        onPress={onCancel}
+        disabled={isLoading}
+      >
+        <Text style={styles.cancelButtonText}>Cancel</Text>
+      </Pressable>
+    </ModalFrame>
   );
 }
 
 const createStyles = (theme: Theme, isDark: boolean) =>
   StyleSheet.create({
-    overlay: {
-      flex: 1,
-      backgroundColor: "rgba(0,0,0,0.6)",
-      justifyContent: "center",
-      alignItems: "center",
-      padding: 24,
-    },
-    container: {
-      backgroundColor: theme.colors.surface,
-      borderRadius: theme.borderRadius.xl,
-      padding: 32,
-      alignItems: "center",
-      width: "100%",
-      maxWidth: 340,
-      ...theme.shadows.lg,
-    },
     iconContainer: {
       width: 64,
       height: 64,

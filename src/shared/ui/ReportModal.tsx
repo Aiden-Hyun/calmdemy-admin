@@ -25,7 +25,7 @@
  * - Success feedback auto-closes after 1.5s (UX best practice)
  */
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -100,7 +100,7 @@ export function ReportModal({
   contentTitle,
 }: ReportModalProps) {
   const { theme, isDark } = useTheme();
-  const styles = React.useMemo(() => createStyles(theme, isDark), [theme, isDark]);
+  const styles = useMemo(() => createStyles(theme, isDark), [theme, isDark]);
 
   const [selectedCategory, setSelectedCategory] = useState<ReportCategory | null>(null);
   const [description, setDescription] = useState('');
@@ -154,7 +154,7 @@ export function ReportModal({
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <View style={styles.container}>
-          {/* Header */}
+          {/* Header with close button */}
           <View style={styles.header}>
             <Text style={styles.title}>Report Issue</Text>
             <TouchableOpacity onPress={handleClose} style={styles.closeButton}>

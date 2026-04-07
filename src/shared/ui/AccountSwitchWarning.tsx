@@ -34,14 +34,13 @@ import {
   View,
   Text,
   StyleSheet,
-  Modal,
   Pressable,
   ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "@core/providers/contexts/ThemeContext";
 import { Theme } from "@/theme";
+import { ModalFrame } from "./ModalFrame";
 
 interface AccountSwitchWarningProps {
   visible: boolean;
@@ -63,7 +62,6 @@ export function AccountSwitchWarning({
   onConfirmSwitch,
 }: AccountSwitchWarningProps) {
   const { theme, isDark } = useTheme();
-  const insets = useSafeAreaInsets();
   const styles = useMemo(() => createStyles(theme, isDark), [theme, isDark]);
   // isLoading prevents double-clicks and disables buttons during the async operation
   const [isLoading, setIsLoading] = useState(false);
@@ -90,96 +88,75 @@ export function AccountSwitchWarning({
   };
 
   return (
-    <Modal
+    <ModalFrame
       visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
+      onDismiss={onClose}
+      showCloseButton={false}
     >
-      <View style={styles.overlay}>
-        <View style={[styles.container, { paddingBottom: insets.bottom + 24 }]}>
-          {/* Warning icon: signals this is a destructive operation */}
-          <View style={styles.iconContainer}>
-            <Ionicons
-              name="warning-outline"
-              size={32}
-              color={theme.colors.warning}
-            />
-          </View>
-
-          <Text style={styles.title}>Switch Accounts?</Text>
-
-          {/* Main warning: explains the consequence of switching */}
-          <Text style={styles.description}>
-            If you switch accounts, you may not see data from your current
-            account unless it's backed up or synced.
-          </Text>
-
-          {/* Informational callout: clarifies which data is affected */}
-          <View style={styles.warningNote}>
-            <Ionicons
-              name="information-circle-outline"
-              size={18}
-              color={theme.colors.textMuted}
-            />
-            <Text style={styles.warningNoteText}>
-              Your favorites, history, and preferences will be associated with
-              the new account.
-            </Text>
-          </View>
-
-          {/* Primary action: destructive (warning color), disabled during async operation */}
-          <Pressable
-            style={({ pressed }) => [
-              styles.primaryButton,
-              pressed && styles.buttonPressed,
-              isLoading && styles.buttonDisabled,
-            ]}
-            onPress={handleConfirm}
-            disabled={isLoading}
-          >
-            {isLoading ? (
-              <ActivityIndicator color="#fff" size="small" />
-            ) : (
-              <Text style={styles.primaryButtonText}>Switch Account</Text>
-            )}
-          </Pressable>
-
-          {/* Secondary action: cancel / go back */}
-          <Pressable
-            style={({ pressed }) => [
-              styles.cancelButton,
-              pressed && styles.buttonPressed,
-            ]}
-            onPress={onClose}
-            disabled={isLoading}
-          >
-            <Text style={styles.cancelButtonText}>Cancel</Text>
-          </Pressable>
-        </View>
+      {/* Warning icon: signals this is a destructive operation */}
+      <View style={styles.iconContainer}>
+        <Ionicons
+          name="warning-outline"
+          size={32}
+          color={theme.colors.warning}
+        />
       </View>
-    </Modal>
+
+      <Text style={styles.title}>Switch Accounts?</Text>
+
+      {/* Main warning: explains the consequence of switching */}
+      <Text style={styles.description}>
+        If you switch accounts, you may not see data from your current
+        account unless it's backed up or synced.
+      </Text>
+
+      {/* Informational callout: clarifies which data is affected */}
+      <View style={styles.warningNote}>
+        <Ionicons
+          name="information-circle-outline"
+          size={18}
+          color={theme.colors.textMuted}
+        />
+        <Text style={styles.warningNoteText}>
+          Your favorites, history, and preferences will be associated with
+          the new account.
+        </Text>
+      </View>
+
+      {/* Primary action: destructive (warning color), disabled during async operation */}
+      <Pressable
+        style={({ pressed }) => [
+          styles.primaryButton,
+          pressed && styles.buttonPressed,
+          isLoading && styles.buttonDisabled,
+        ]}
+        onPress={handleConfirm}
+        disabled={isLoading}
+      >
+        {isLoading ? (
+          <ActivityIndicator color="#fff" size="small" />
+        ) : (
+          <Text style={styles.primaryButtonText}>Switch Account</Text>
+        )}
+      </Pressable>
+
+      {/* Secondary action: cancel / go back */}
+      <Pressable
+        style={({ pressed }) => [
+          styles.cancelButton,
+          pressed && styles.buttonPressed,
+        ]}
+        onPress={onClose}
+        disabled={isLoading}
+      >
+        <Text style={styles.cancelButtonText}>Cancel</Text>
+      </Pressable>
+    </ModalFrame>
   );
 }
 
 const createStyles = (theme: Theme, isDark: boolean) =>
   StyleSheet.create({
-    overlay: {
-      flex: 1,
-      backgroundColor: "rgba(0,0,0,0.6)",
-      justifyContent: "center",
-      alignItems: "center",
-      padding: 24,
-    },
-    container: {
-      backgroundColor: theme.colors.surface,
-      borderRadius: theme.borderRadius.xl,
-      padding: 32,
-      alignItems: "center",
-      width: "100%",
-      maxWidth: 340,
-      ...theme.shadows.lg,
-    },
     iconContainer: {
       width: 64,
       height: 64,
