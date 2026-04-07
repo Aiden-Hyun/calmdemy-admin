@@ -10,8 +10,9 @@ DEFAULT_VOICE_NAME_OVERRIDES = {
     "xtts-female-calm": "Emma",
     "xtts-male-soothing": "James",
     # Qwen cloned sample voices
-    "declutter_the_mind_7s": "Declutter Sample",
-    "laura_qwen": "Laura Qwen",
+    "declutter_the_mind_7s": "John",
+    "laura_qwen": "Laura",
+    "daniel_16s": "Daniel",
     # Gemini
     "gemini-default": "Kore",
     "gemini-default-pro": "Kore",

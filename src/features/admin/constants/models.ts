@@ -47,14 +47,14 @@ export const TTS_MODELS: ModelOption[] = [
 export const TTS_VOICES: VoiceOption[] = [
   {
     id: 'declutter_the_mind_7s',
-    label: 'Declutter Sample (7s)',
+    label: 'John',
     ttsModel: 'qwen3-base',
     description: 'Clone voice from sample_voices/declutter_the_mind_7s.wav',
     sampleAsset: require('../../../../sample_voices/declutter_the_mind_7s.wav'),
   },
   {
     id: 'laura_qwen',
-    label: 'Laura Qwen',
+    label: 'Laura',
     ttsModel: 'qwen3-base',
     description: 'Clone voice from sample_voices/laura_qwen.wav',
     sampleAsset: require('../../../../sample_voices/laura_qwen.wav'),
