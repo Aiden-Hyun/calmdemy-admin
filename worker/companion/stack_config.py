@@ -13,8 +13,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKER_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
 DEFAULT_STACKS_FILE = os.path.join(WORKER_DIR, "worker_stacks.json")
 
-_NON_DMS_TTS_MODELS = ["gemini-tts-flash", "gemini-tts-pro"]
-
 _DEFAULT_STACKS = [
     {
         "id": "local-primary",
@@ -23,7 +21,7 @@ _DEFAULT_STACKS = [
         "enabled": True,
         "dispatch": True,
         "acceptNonTtsSteps": True,
-        "ttsModels": list(_NON_DMS_TTS_MODELS),
+        "ttsModels": ["gemini-tts-flash", "gemini-tts-pro"],
         "extraCapabilityKeys": [],
     },
     {
@@ -35,36 +33,6 @@ _DEFAULT_STACKS = [
         "acceptNonTtsSteps": False,
         "ttsModels": [],
         "extraCapabilityKeys": ["image"],
-    },
-    {
-        "id": "local-tts-dms-1",
-        "role": "tts",
-        "venv": ".venv-dms",
-        "enabled": True,
-        "dispatch": False,
-        "acceptNonTtsSteps": False,
-        "ttsModels": ["dms"],
-        "extraCapabilityKeys": [],
-    },
-    {
-        "id": "local-tts-dms-2",
-        "role": "tts",
-        "venv": ".venv-dms",
-        "enabled": True,
-        "dispatch": False,
-        "acceptNonTtsSteps": False,
-        "ttsModels": ["dms"],
-        "extraCapabilityKeys": [],
-    },
-    {
-        "id": "local-tts-dms-3",
-        "role": "tts",
-        "venv": ".venv-dms",
-        "enabled": True,
-        "dispatch": False,
-        "acceptNonTtsSteps": False,
-        "ttsModels": ["dms"],
-        "extraCapabilityKeys": [],
     },
     {
         "id": "local-tts-qwen",

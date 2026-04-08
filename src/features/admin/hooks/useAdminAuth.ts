@@ -26,6 +26,7 @@
 
 import { useEffect, useState } from 'react';
 import { useAuth } from '@core/providers/contexts/AuthContext';
+import { checkIsAdmin } from '../data/adminRepository';
 
 interface UseAdminAuthResult {
   isAdmin: boolean;
@@ -60,9 +61,22 @@ export function useAdminAuth(): UseAdminAuthResult {
       try {
         const token = await user.getIdTokenResult(true);
         const claimAdmin = token.claims?.admin === true;
-        if (!cancelled) {
-          setIsAdmin(claimAdmin);
-          setIsChecking(false);
+        if (claimAdmin) {
+          if (!cancelled) {
+            setIsAdmin(true);
+            setIsChecking(false);
+          }
+        } else {
+          // Legacy fallback: check Firestore role field
+          // TODO: Set custom claims via scripts/setAdminClaims.js and remove this fallback
+          const legacyAdmin = await checkIsAdmin(user.uid);
+          if (legacyAdmin) {
+            console.warn('[useAdminAuth] Admin granted via Firestore fallback — run setAdminClaims.js to set JWT claim');
+          }
+          if (!cancelled) {
+            setIsAdmin(legacyAdmin);
+            setIsChecking(false);
+          }
         }
       } catch {
         if (!cancelled) {

@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Calmdemy src/ — Code Quality Report</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #242836;
+    --border: #2e3345;
+    --text: #e4e7ef;
+    --text-muted: #8b90a0;
+    --accent: #7c6cff;
+    --accent-glow: rgba(124,108,255,.15);
+    --green: #34d399;
+    --yellow: #fbbf24;
+    --orange: #fb923c;
+    --red: #f87171;
+    --critical: #ef4444;
+    --high: #f97316;
+    --medium: #eab308;
+    --low: #3b82f6;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background:var(--bg); color:var(--text); line-height:1.6; }
+  .container { max-width:1100px; margin:0 auto; padding:40px 24px 80px; }
+
+  /* Header */
+  .header { text-align:center; margin-bottom:48px; }
+  .header h1 { font-size:2rem; font-weight:700; margin-bottom:8px; }
+  .header .subtitle { color:var(--text-muted); font-size:0.95rem; }
+
+  /* Score Ring */
+  .score-section { display:flex; justify-content:center; margin-bottom:48px; }
+  .score-card { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:40px 60px; text-align:center; position:relative; overflow:hidden; }
+  .score-card::before { content:''; position:absolute; top:0; left:50%; transform:translateX(-50%); width:200px; height:3px; background:linear-gradient(90deg, transparent, var(--accent), transparent); }
+  .score-ring { position:relative; width:160px; height:160px; margin:0 auto 20px; }
+  .score-ring svg { transform:rotate(-90deg); }
+  .score-ring .bg { fill:none; stroke:var(--surface2); stroke-width:10; }
+  .score-ring .fg { fill:none; stroke:var(--accent); stroke-width:10; stroke-linecap:round; stroke-dasharray:440; stroke-dashoffset:132; transition:stroke-dashoffset 1s ease; }
+  .score-number { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:3rem; font-weight:800; color:var(--accent); }
+  .score-number span { font-size:1.2rem; color:var(--text-muted); }
+  .score-label { font-size:1.1rem; font-weight:600; color:var(--text-muted); }
+
+  /* Dimension Cards */
+  .dimensions { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:48px; }
+  .dim-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:20px; }
+  .dim-card .dim-name { font-size:0.8rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-muted); margin-bottom:8px; }
+  .dim-card .dim-score { font-size:2rem; font-weight:700; }
+  .dim-card .dim-bar { height:4px; border-radius:2px; background:var(--surface2); margin-top:12px; overflow:hidden; }
+  .dim-card .dim-bar-fill { height:100%; border-radius:2px; }
+  .dim-green .dim-score { color:var(--green); }
+  .dim-green .dim-bar-fill { background:var(--green); }
+  .dim-yellow .dim-score { color:var(--yellow); }
+  .dim-yellow .dim-bar-fill { background:var(--yellow); }
+  .dim-orange .dim-score { color:var(--orange); }
+  .dim-orange .dim-bar-fill { background:var(--orange); }
+  .dim-red .dim-score { color:var(--red); }
+  .dim-red .dim-bar-fill { background:var(--red); }
+
+  /* Stats */
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:48px; }
+  .stat { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px 20px; }
+  .stat .stat-val { font-size:1.6rem; font-weight:700; color:var(--text); }
+  .stat .stat-label { font-size:0.78rem; color:var(--text-muted); margin-top:2px; }
+
+  /* Sections */
+  .section { margin-bottom:40px; }
+  .section h2 { font-size:1.25rem; font-weight:700; margin-bottom:16px; padding-bottom:8px; border-bottom:1px solid var(--border); }
+  .section h3 { font-size:1rem; font-weight:600; margin:20px 0 10px; color:var(--text-muted); }
+
+  /* Finding Cards */
+  .finding { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:16px 20px; margin-bottom:12px; }
+  .finding-header { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+  .severity { display:inline-block; padding:2px 10px; border-radius:6px; font-size:0.72rem; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; }
+  .sev-critical { background:rgba(239,68,68,.15); color:var(--critical); }
+  .sev-high { background:rgba(249,115,22,.15); color:var(--high); }
+  .sev-medium { background:rgba(234,179,8,.15); color:var(--medium); }
+  .sev-low { background:rgba(59,130,246,.15); color:var(--low); }
+  .finding-title { font-weight:600; font-size:0.95rem; }
+  .finding-file { color:var(--text-muted); font-size:0.82rem; font-family:'Fira Code',monospace; margin-bottom:6px; }
+  .finding-desc { color:var(--text-muted); font-size:0.88rem; line-height:1.5; }
+
+  /* Summary Table */
+  table { width:100%; border-collapse:collapse; background:var(--surface); border-radius:10px; overflow:hidden; margin-bottom:16px; }
+  th { background:var(--surface2); padding:10px 16px; text-align:left; font-size:0.78rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); }
+  td { padding:10px 16px; border-top:1px solid var(--border); font-size:0.88rem; }
+  tr:hover td { background:var(--accent-glow); }
+
+  /* Strengths */
+  .strength { display:flex; align-items:flex-start; gap:10px; margin-bottom:10px; }
+  .strength .check { color:var(--green); font-size:1.1rem; flex-shrink:0; margin-top:2px; }
+  .strength p { font-size:0.9rem; }
+  .strength strong { color:var(--text); }
+
+  /* Verdict */
+  .verdict { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:32px; text-align:center; margin-top:48px; }
+  .verdict h2 { font-size:1.4rem; margin-bottom:12px; }
+  .verdict-text { color:var(--text-muted); font-size:0.95rem; max-width:700px; margin:0 auto; line-height:1.7; }
+
+  @media(max-width:768px) {
+    .dimensions, .stats { grid-template-columns:repeat(2,1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <h1>Calmdemy <code>src/</code> — Code Quality Report</h1>
+    <div class="subtitle">154 TypeScript / TSX files &middot; ~49,500 LOC &middot; Reviewed April 7, 2026</div>
+  </div>
+
+  <!-- Overall Score -->
+  <div class="score-section">
+    <div class="score-card">
+      <div class="score-ring">
+        <svg viewBox="0 0 160 160">
+          <circle class="bg" cx="80" cy="80" r="70"/>
+          <!-- 70/100 → dashoffset = 440 - (440 * 0.70) = 132 -->
+          <circle class="fg" cx="80" cy="80" r="70"/>
+        </svg>
+        <div class="score-number">70<span>/100</span></div>
+      </div>
+      <div class="score-label">Overall Quality Score</div>
+    </div>
+  </div>
+
+  <!-- Four Dimensions -->
+  <div class="dimensions">
+    <div class="dim-card dim-yellow">
+      <div class="dim-name">Security</div>
+      <div class="dim-score">62</div>
+      <div class="dim-bar"><div class="dim-bar-fill" style="width:62%"></div></div>
+    </div>
+    <div class="dim-card dim-yellow">
+      <div class="dim-name">Performance</div>
+      <div class="dim-score">68</div>
+      <div class="dim-bar"><div class="dim-bar-fill" style="width:68%"></div></div>
+    </div>
+    <div class="dim-card dim-yellow">
+      <div class="dim-name">Correctness</div>
+      <div class="dim-score">72</div>
+      <div class="dim-bar"><div class="dim-bar-fill" style="width:72%"></div></div>
+    </div>
+    <div class="dim-card dim-green">
+      <div class="dim-name">Maintainability</div>
+      <div class="dim-score">78</div>
+      <div class="dim-bar"><div class="dim-bar-fill" style="width:78%"></div></div>
+    </div>
+  </div>
+
+  <!-- Quick Stats -->
+  <div class="stats">
+    <div class="stat"><div class="stat-val">154</div><div class="stat-label">TS / TSX files</div></div>
+    <div class="stat"><div class="stat-val">14</div><div class="stat-label">Test files</div></div>
+    <div class="stat"><div class="stat-val">49.5k</div><div class="stat-label">Lines of code</div></div>
+    <div class="stat"><div class="stat-val">56</div><div class="stat-label">Total findings</div></div>
+  </div>
+
+  <!-- ============ SECURITY ============ -->
+  <div class="section">
+    <h2>Security — 62 / 100</h2>
+    <p style="color:var(--text-muted);font-size:0.9rem;margin-bottom:16px;">Two critical authorization gaps and several medium-severity issues. Firebase SDK prevents injection, but client-side admin checks are insufficient.</p>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-critical">Critical</span><span class="finding-title">Admin repository functions lack server-side authorization</span></div>
+      <div class="finding-file">src/features/admin/data/adminRepository.ts — 12+ exported functions</div>
+      <div class="finding-desc">Functions like <code>createContentJob()</code>, <code>retryJob()</code>, <code>cancelJob()</code>, and <code>approveSubjectPlan()</code> check authentication via <code>getCurrentUserId()</code> but never validate admin role. Any authenticated user can call these directly via the Firestore SDK, completely bypassing the UI-level admin check in <code>AdminLayout</code>. Firestore Security Rules must enforce admin authorization server-side.</div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-critical">Critical</span><span class="finding-title">Hardcoded local dev endpoint with trace UUID</span></div>
+      <div class="finding-file">src/core/providers/contexts/auth/helpers.ts — line 32</div>
+      <div class="finding-desc">Hardcoded <code>http://127.0.0.1:7242/ingest/abd8d170-...</code> endpoint and UUID visible in compiled code. Should be moved to environment variables and gated behind <code>__DEV__</code>.</div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-high">High</span><span class="finding-title">Firestore fallback grants admin access</span></div>
+      <div class="finding-file">src/features/admin/hooks/useAdminAuth.ts — lines 64–73</div>
+      <div class="finding-desc">When Firebase custom claims are missing, a fallback reads the Firestore user document's <code>role</code> field. If Firestore rules permit client writes, a user could set their own role to "admin" and gain access. Custom JWT claims should be the only authoritative source.</div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-medium">Medium</span><span class="finding-title">Account deletion is non-atomic</span></div>
+      <div class="finding-file">src/features/profile/data/profileRepository.ts — lines 464–503</div>
+      <div class="finding-desc">Sequential deletes across 6 Firestore collections without transactions. Partial failure leaves orphaned data. Use batch writes or transactions.</div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-medium">Medium</span><span class="finding-title">No input validation on email/password changes</span></div>
+      <div class="finding-file">src/core/providers/contexts/auth/actions/accountActions.ts — lines 113, 126</div>
+      <div class="finding-desc">No client-side format validation before Firebase calls. Invalid or malicious emails could be set.</div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-medium">Medium</span><span class="finding-title">Debug logging captures user IDs to external endpoint</span></div>
+      <div class="finding-file">src/core/providers/contexts/auth/helpers.ts — lines 51–71</div>
+      <div class="finding-desc">Auth debug logs include <code>userId</code> and are sent to the local dev server. If that server runs on shared infra, UIDs could leak.</div>
+    </div>
+
+    <h3>What's good</h3>
+    <div class="strength"><span class="check">✓</span><p><strong>No injection vectors</strong> — Firestore SDK parameterizes all queries; no string interpolation in <code>where()</code> clauses.</p></div>
+    <div class="strength"><span class="check">✓</span><p><strong>No XSS surface</strong> — Zero <code>dangerouslySetInnerHTML</code> or <code>eval()</code> usage found.</p></div>
+    <div class="strength"><span class="check">✓</span><p><strong>Secrets externalized</strong> — Firebase config in <code>env.ts</code>; no hardcoded API keys in source.</p></div>
+    <div class="strength"><span class="check">✓</span><p><strong>HTTPS throughout</strong> — All Firebase endpoints use HTTPS; only the dev endpoint uses HTTP.</p></div>
+  </div>
+
+  <!-- ============ PERFORMANCE ============ -->
+  <div class="section">
+    <h2>Performance — 68 / 100</h2>
+    <p style="color:var(--text-muted);font-size:0.9rem;margin-bottom:16px;">Unbounded Firestore subscriptions and missing cleanup guards are the primary concerns. The admin feature creates excessive real-time listeners per component.</p>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-critical">Critical</span><span class="finding-title">Unbounded collection scan on worker_status</span></div>
+      <div class="finding-file">src/features/admin/data/adminRepository.ts — line 784</div>
+      <div class="finding-desc"><code>onSnapshot(collection(db, 'worker_status'), ...)</code> subscribes to the entire collection with no limit or filter. Every worker update triggers a full snapshot. Add query filters or <code>limit()</code>.</div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-high">High</span><span class="finding-title">JobCard creates 2 Firestore listeners per card</span></div>
+      <div class="finding-file">src/features/admin/components/JobCard.tsx — lines 100–136</div>
+      <div class="finding-desc">Each JobCard subscribes to both <code>factory_jobs</code> and <code>factory_job_runs</code>. A list of 50 jobs creates 100 active real-time listeners. Batch-fetch or consolidate into a single subscription.</div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-high">High</span><span class="finding-title">Missing isMounted guards on 4+ onSnapshot listeners</span></div>
+      <div class="finding-file">src/features/admin/data/adminRepository.ts — lines 784, 816, 851, 889</div>
+      <div class="finding-desc">Real-time subscriptions return callbacks without checking if the component is still mounted. Can cause React state-update warnings and memory leaks on rapid navigation.</div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-medium">Medium</span><span class="finding-title">getTodayQuote fetches ALL quotes as fallback</span></div>
+      <div class="finding-file">src/features/home/data/homeRepository.ts — line 96</div>
+      <div class="finding-desc">If no quote is scheduled for today, <code>getDocs(quotesCollection)</code> fetches the entire collection to pick one at random. Add <code>limit(100)</code> or use document-ID sharding.</div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-medium">Medium</span><span class="finding-title">ThemeContext returns null during AsyncStorage load</span></div>
+      <div class="finding-file">src/core/providers/contexts/ThemeContext.tsx — lines 176–178</div>
+      <div class="finding-desc">Provider returns <code>null</code> until theme preference loads, unmounting the entire app tree and causing a blank flash on cold start. Render with a default theme while loading instead.</div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-medium">Medium</span><span class="finding-title">Unbounded child jobs subscription</span></div>
+      <div class="finding-file">src/features/admin/data/adminRepository.ts — lines 667–689</div>
+      <div class="finding-desc">Real-time subscription to all child jobs of a parent with no limit. A subject with 500 course children subscribes to all 500 documents.</div>
+    </div>
+  </div>
+
+  <!-- ============ CORRECTNESS ============ -->
+  <div class="section">
+    <h2>Correctness — 72 / 100</h2>
+    <p style="color:var(--text-muted);font-size:0.9rem;margin-bottom:16px;">Missing return types on async functions, untyped error handling, and production console.log statements are the main concerns. Core logic is sound.</p>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-high">High</span><span class="finding-title">Missing Promise return types on 10+ async functions</span></div>
+      <div class="finding-file">src/core/providers/contexts/auth/actions/ — credentialActions.ts, sessionActions.ts, accountActions.ts</div>
+      <div class="finding-desc">Async functions like <code>deleteAccount</code>, <code>linkAnonymousAccount</code>, <code>signUp</code>, <code>signIn</code>, etc. lack explicit <code>Promise&lt;void&gt;</code> return type annotations. TypeScript cannot catch missing <code>await</code> at call sites.</div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-high">High</span><span class="finding-title">Untyped error handling — <code>catch (error: any)</code></span></div>
+      <div class="finding-file">credentialActions.ts, accountActions.ts, AuthContext.web.tsx — 6+ instances</div>
+      <div class="finding-desc">Breaks type safety and hides error information. Replace with <code>catch (error: unknown)</code> and use type guards: <code>error instanceof Error ? error.message : 'Unknown error'</code>.</div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-high">High</span><span class="finding-title">Unsafe <code>as any</code> type assertions for Firestore timestamps</span></div>
+      <div class="finding-file">src/features/admin/components/FactoryOverview.tsx — lines 385, 509–513</div>
+      <div class="finding-desc">Multiple <code>as any</code> casts when handling Firestore Timestamps. Create a proper type guard: <code>isFirestoreTimestamp(value)</code>.</div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-medium">Medium</span><span class="finding-title">30+ production console.log statements</span></div>
+      <div class="finding-file">AuthContext.tsx, SubscriptionContext.tsx, AppProviders.tsx, profileRepository.ts</div>
+      <div class="finding-desc">Startup logs like <code>console.log('[Startup] AuthContext module loaded')</code> pollute the console, slow startup, and expose user IDs. Gate behind <code>__DEV__</code> or remove.</div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-medium">Medium</span><span class="finding-title">Unsafe JSON.parse without separate try/catch</span></div>
+      <div class="finding-file">src/services/downloadService.ts — line 131</div>
+      <div class="finding-desc">AsyncStorage data parsed with <code>JSON.parse(data)</code>. If data is corrupted, the outer catch handles it — but the error message is generic. Parse errors should be caught and handled specifically.</div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-medium">Medium</span><span class="finding-title">Unguarded optional chaining before property access</span></div>
+      <div class="finding-file">src/features/home/data/homeRepository.ts — lines 387–426</div>
+      <div class="finding-desc"><code>series.chapters?.find()</code> handles undefined chapters, but <code>series.title</code> is assumed to exist. If title is missing from Firestore, output is malformed.</div>
+    </div>
+  </div>
+
+  <!-- ============ MAINTAINABILITY ============ -->
+  <div class="section">
+    <h2>Maintainability — 78 / 100</h2>
+    <p style="color:var(--text-muted);font-size:0.9rem;margin-bottom:16px;">Excellent architecture, documentation, and patterns. Dragged down by very low test coverage (14 test files for 154 source files) and several oversized components.</p>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-critical">Critical</span><span class="finding-title">Auth feature has zero test coverage (2,323 LOC)</span></div>
+      <div class="finding-file">src/features/auth/ — 0 test files</div>
+      <div class="finding-desc">The entire auth feature — credential linking, session management, account deletion, anonymous upgrade — is untested. This is the most sensitive code path in the app.</div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-critical">Critical</span><span class="finding-title">UI component library mostly untested (8,444 LOC)</span></div>
+      <div class="finding-file">src/shared/ui/ — 1 test file out of 30+ components</div>
+      <div class="finding-desc">AudioPlayer (563 LOC), PaywallModal (757 LOC), RecoveryWizard (766 LOC), MediaPlayer (506 LOC) — all untested. Only ProtectedRoute has tests.</div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-high">High</span><span class="finding-title">SRP violations in large components</span></div>
+      <div class="finding-file">ContentManagerScreen.tsx (607 LOC), PaywallModal.tsx (757 LOC), RecoveryWizard.tsx (766 LOC)</div>
+      <div class="finding-desc">These components handle UI rendering, state management, Firestore subscriptions, and business logic all in one file. Extract hooks and sub-components.</div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-high">High</span><span class="finding-title">Modal component duplication (~800 LOC)</span></div>
+      <div class="finding-file">AccountPromptModal, AccountSwitchConfirmModal, CredentialCollisionModal, PaywallModal, ReportModal</div>
+      <div class="finding-desc">Each modal reimplements safe-area insets, dismiss logic, fade animations, and button layouts. Extract a shared <code>ModalFrame</code> base component.</div>
+    </div>
+
+    <div class="finding">
+      <div class="finding-header"><span class="severity sev-medium">Medium</span><span class="finding-title">Magic numbers and strings scattered</span></div>
+      <div class="finding-file">ContentManagerScreen.tsx — lines 155, 215, 223</div>
+      <div class="finding-desc">Hardcoded timer values (<code>8_000</code>, <code>15_000</code>) and collection arrays (<code>NO_THUMBNAIL_COLLECTIONS</code>) should live in constants files.</div>
+    </div>
+
+    <h3>What's good</h3>
+    <div class="strength"><span class="check">✓</span><p><strong>Excellent documentation culture</strong> — Every major file has detailed architectural role comments explaining design patterns and "why" decisions.</p></div>
+    <div class="strength"><span class="check">✓</span><p><strong>Strong type system</strong> — Discriminated unions, well-structured domain models, backward-compatible aliases in <code>types/index.ts</code>.</p></div>
+    <div class="strength"><span class="check">✓</span><p><strong>Clear feature organization</strong> — Consistent <code>features/{name}/{screens,data,hooks,components}</code> structure across all modules.</p></div>
+    <div class="strength"><span class="check">✓</span><p><strong>Thoughtful theme system</strong> — Token-based design tokens, light/dark modes, sleep-mode override, three distinct font families.</p></div>
+    <div class="strength"><span class="check">✓</span><p><strong>Context pattern consistency</strong> — All providers follow the same create → provide → consume hook pattern with proper cleanup.</p></div>
+    <div class="strength"><span class="check">✓</span><p><strong>content-manager is exemplary</strong> — 8 test files, clear types, well-separated concerns. A model for other features to follow.</p></div>
+  </div>
+
+  <!-- ============ FINDINGS SUMMARY ============ -->
+  <div class="section">
+    <h2>All Findings by Severity</h2>
+    <table>
+      <thead><tr><th>Severity</th><th>Count</th><th>Top Areas</th></tr></thead>
+      <tbody>
+        <tr><td><span class="severity sev-critical">Critical</span></td><td>5</td><td>Admin auth bypass, test coverage gaps, unbounded queries</td></tr>
+        <tr><td><span class="severity sev-high">High</span></td><td>12</td><td>Firestore listeners, type safety, SRP violations, duplication</td></tr>
+        <tr><td><span class="severity sev-medium">Medium</span></td><td>18</td><td>Missing validation, magic values, console.log, optional chaining</td></tr>
+        <tr><td><span class="severity sev-low">Low</span></td><td>8</td><td>Naming, inline styles, animated ref cleanup</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============ TOP 5 PRIORITIES ============ -->
+  <div class="section">
+    <h2>Top 5 Actions — Highest Impact</h2>
+    <table>
+      <thead><tr><th>#</th><th>Action</th><th>Impact</th><th>Effort</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>Enforce admin authorization in Firestore Security Rules (not just client-side)</td><td>Closes privilege escalation</td><td>4–8 hrs</td></tr>
+        <tr><td>2</td><td>Add <code>limit()</code> and <code>isMounted</code> guards to all Firestore <code>onSnapshot</code> calls</td><td>Prevents unbounded reads + memory leaks</td><td>3–4 hrs</td></tr>
+        <tr><td>3</td><td>Add test suites for auth actions and core providers</td><td>Covers the riskiest untested code</td><td>12–16 hrs</td></tr>
+        <tr><td>4</td><td>Replace <code>catch (error: any)</code> with <code>catch (error: unknown)</code> + type guards</td><td>Restores type safety across error paths</td><td>2–3 hrs</td></tr>
+        <tr><td>5</td><td>Extract ModalFrame base component and split 500+ LOC components</td><td>Removes ~800 LOC duplication, improves testability</td><td>8–12 hrs</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============ TEST COVERAGE ============ -->
+  <div class="section">
+    <h2>Test Coverage by Feature</h2>
+    <table>
+      <thead><tr><th>Feature</th><th>LOC</th><th>Test Files</th><th>Coverage</th></tr></thead>
+      <tbody>
+        <tr><td>content-manager</td><td>6,533</td><td>8</td><td style="color:var(--green)">Good ✓</td></tr>
+        <tr><td>admin</td><td>14,053</td><td>2</td><td style="color:var(--orange)">Low</td></tr>
+        <tr><td>shared/ui</td><td>8,444</td><td>1</td><td style="color:var(--red)">Very Low</td></tr>
+        <tr><td>core/providers</td><td>~3,000</td><td>1</td><td style="color:var(--red)">Very Low</td></tr>
+        <tr><td>auth</td><td>2,323</td><td>0</td><td style="color:var(--critical)">None</td></tr>
+        <tr><td>home / meditate / music / profile / sleep</td><td>2,667</td><td>0</td><td style="color:var(--critical)">None</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============ VERDICT ============ -->
+  <div class="verdict">
+    <h2>Verdict: 70 / 100 — Request Changes</h2>
+    <p class="verdict-text">
+      The Calmdemy codebase has <strong>strong architectural foundations</strong> — thoughtful feature organization, excellent inline documentation, and a solid type system. These are genuinely above-average for a project of this size. However, two categories drag the score down significantly: <strong>security</strong> (client-side-only admin authorization is a critical gap) and <strong>test coverage</strong> (93% of code outside content-manager is untested). Addressing the top 5 actions above would realistically bring this to an <strong>85+</strong>.
+    </p>
+  </div>
+
+</div>
+</body>
+</html>

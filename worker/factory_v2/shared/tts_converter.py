@@ -118,7 +118,7 @@ def convert_to_audio(script: str, job_data: dict) -> str:
     """Convert script to WAV audio, handling pause markers."""
     global _cached_tts, _cached_tts_id, _cached_voice_id
 
-    tts_model_id = job_data.get("ttsModel", "dms")
+    tts_model_id = job_data.get("ttsModel", "qwen3-base")
     voice_id = job_data.get("ttsVoice", "expresso/ex03-ex01_happy_001_channel1_334s.wav")
 
     logger.info(

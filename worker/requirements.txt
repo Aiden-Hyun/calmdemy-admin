@@ -1,3 +1,3 @@
 # Base dependency set for local workers (LLM + image + common TTS).
-# For DMS-only stacks, use requirements.dms.txt instead.
+# For Qwen TTS stacks, use requirements.qwen.txt instead.
 -r requirements.base.txt

@@ -20,36 +20,6 @@
     "extraCapabilityKeys": ["image"]
   },
   {
-    "id": "local-tts-dms-1",
-    "role": "tts",
-    "venv": ".venv-dms",
-    "enabled": true,
-    "dispatch": false,
-    "acceptNonTtsSteps": false,
-    "ttsModels": ["dms"],
-    "extraCapabilityKeys": []
-  },
-  {
-    "id": "local-tts-dms-2",
-    "role": "tts",
-    "venv": ".venv-dms",
-    "enabled": true,
-    "dispatch": false,
-    "acceptNonTtsSteps": false,
-    "ttsModels": ["dms"],
-    "extraCapabilityKeys": []
-  },
-  {
-    "id": "local-tts-dms-3",
-    "role": "tts",
-    "venv": ".venv-dms",
-    "enabled": true,
-    "dispatch": false,
-    "acceptNonTtsSteps": false,
-    "ttsModels": ["dms"],
-    "extraCapabilityKeys": []
-  },
-  {
     "id": "local-tts-qwen",
     "role": "tts",
     "venv": ".venv-qwen",

@@ -16,19 +16,6 @@ DEFAULT_VOICE_NAME_OVERRIDES = {
     # Gemini
     "gemini-default": "Kore",
     "gemini-default-pro": "Kore",
-    # DMS voices (Kyutai delayed-streams modeling)
-    "expresso/ex03-ex01_happy_001_channel1_334s.wav": "Nolan",
-    "expresso/ex03-ex01_calm_001_channel1_1143s.wav": "Gavin",
-    "vctk/p226_023.wav": "Hugo",
-    "vctk/p225_023.wav": "Mila",
-    "vctk/p227_023.wav": "Simon",
-    "vctk/p228_023.wav": "Noa",
-    "vctk/p229_023.wav": "Luna",
-    "vctk/p230_023.wav": "Eva",
-    "vctk/p231_023.wav": "Iris",
-    "vctk/p232_023.wav": "Leo",
-    "vctk/p233_023.wav": "Aria",
-    "vctk/p234_023.wav": "Nora",
 }
 
 

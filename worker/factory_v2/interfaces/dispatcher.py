@@ -127,7 +127,7 @@ def _claim_for_v2(
                     },
                 )
                 return None
-            required_tts_model = str(data.get("ttsModel") or "").strip().lower() or "dms"
+            required_tts_model = str(data.get("ttsModel") or "").strip().lower() or "qwen3-base"
             if not any_enabled_stack_supports_tts_model(stack_defs, required_tts_model):
                 message = (
                     f"No enabled worker stack supports ttsModel '{required_tts_model}'. "

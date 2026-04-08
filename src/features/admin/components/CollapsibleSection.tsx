@@ -30,7 +30,7 @@
  *   expanded={expandedSections.course}
  *   onToggle={() => toggleSection('course')}
  * >
- *   {/* form controls render here */}
+ *   ... form controls render here ...
  * </CollapsibleSection>
  * ```
  */

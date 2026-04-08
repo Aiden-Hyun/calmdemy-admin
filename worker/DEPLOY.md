@@ -11,7 +11,7 @@ This deployment guide covers the V2-only content factory runtime.
 ## Prerequisites
 
 - Python 3 with `venv` support
-- `./run_companion.sh` provisions `worker/.venv`, `worker/.venv-dms`, and `worker/.venv-qwen`
+- `./run_companion.sh` provisions `worker/.venv` and `worker/.venv-qwen`
 - Firebase Admin credentials available (`GOOGLE_APPLICATION_CREDENTIALS` or `worker/service-account-key.json`)
 - App dependencies installed (`npm install` in app root)
 - Stack manifest configured in `worker/worker_stacks.json`
@@ -35,7 +35,7 @@ From `apps/calmdemy/worker`:
 
 Companion starts/stops `local_worker.py` automatically based on `worker_control/local` and queue state.
 In multi-stack mode, it starts one process per expanded stack definition.
-The bootstrap script provisions `.venv`, `.venv-dms`, and `.venv-qwen` before launch.
+The bootstrap script provisions `.venv` and `.venv-qwen` before launch.
 `desiredState=auto` is the demand-based mode: it starts only the stacks needed for current queue work and scales unused stacks back down.
 `desiredState=running` remains the manual override that keeps all enabled stacks up.
 

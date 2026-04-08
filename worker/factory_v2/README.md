@@ -44,7 +44,7 @@ Completed shard outputs are checkpointed immediately to `runtime.course_audio_re
 Companion starts one or more `local_worker.py` processes based on `worker/worker_stacks.json`.
 Manifest entries may set `replicas` to expand into multiple concrete worker processes.
 Capability routing ensures synth steps are claimed only by stacks whose `ttsModels` allowlist matches.
-The default local profile expands to 11 stacks: 1 primary dispatcher/non-TTS stack, 3 DMS TTS stacks,
+The default local profile expands to 9 stacks: 1 primary dispatcher/non-TTS stack, 1 image stack,
 and a 7-worker Qwen TTS pool.
 
 ## Runtime flags

@@ -24,12 +24,12 @@ class CompanionControlLoopTests(unittest.TestCase):
         workload = _collect_auto_workload_from_payloads(
             [
                 {
-                    "_queue_id": "stale-dms",
+                    "_queue_id": "stale-qwen",
                     "state": "running",
                     "step_name": "synthesize_course_audio",
-                    "required_tts_model": "dms",
-                    "capability_key": "tts:dms",
-                    "lease_owner": "local-tts-dms-3",
+                    "required_tts_model": "qwen3-base",
+                    "capability_key": "tts:qwen3-base",
+                    "lease_owner": "local-tts-qwen-3",
                     "updated_at": now - timedelta(days=19),
                     "step_started_at": now - timedelta(days=19),
                     "lease_expires_at": None,
@@ -43,8 +43,8 @@ class CompanionControlLoopTests(unittest.TestCase):
                 },
             ],
             worker_status_by_id={
-                "local-tts-dms-3": {
-                    "workerId": "local-tts-dms-3",
+                "local-tts-qwen-3": {
+                    "workerId": "local-tts-qwen-3",
                     "lastHeartbeat": now,
                 }
             },
@@ -61,33 +61,33 @@ class CompanionControlLoopTests(unittest.TestCase):
         workload = _collect_auto_workload_from_payloads(
             [
                 {
-                    "_queue_id": "fresh-dms",
+                    "_queue_id": "fresh-qwen",
                     "state": "running",
                     "step_name": "synthesize_course_audio",
-                    "required_tts_model": "dms",
-                    "capability_key": "tts:dms",
-                    "lease_owner": "local-tts-dms-3",
+                    "required_tts_model": "qwen3-base",
+                    "capability_key": "tts:qwen3-base",
+                    "lease_owner": "local-tts-qwen-3",
                     "updated_at": now - timedelta(seconds=5),
                     "step_started_at": now - timedelta(seconds=5),
                     "lease_expires_at": None,
                 },
             ],
             worker_status_by_id={
-                "local-tts-dms-3": {
-                    "workerId": "local-tts-dms-3",
+                "local-tts-qwen-3": {
+                    "workerId": "local-tts-qwen-3",
                     "lastHeartbeat": now,
                 }
             },
             now=now,
         )
 
-        self.assertEqual(workload["tts_outstanding"], {"dms": 1})
+        self.assertEqual(workload["tts_outstanding"], {"qwen3-base": 1})
         self.assertEqual(workload["image_outstanding"], 0)
-        self.assertEqual(workload["active_owners"], {"local-tts-dms-3"})
+        self.assertEqual(workload["active_owners"], {"local-tts-qwen-3"})
 
-    def test_desired_auto_stack_ids_do_not_keep_dms_worker_for_stale_queue(self) -> None:
+    def test_desired_auto_stack_ids_caps_qwen_workers_when_stale_queue_detected(self) -> None:
         enabled_stacks = [stack for stack in load_stack_config() if stack.get("enabled", True)]
-        running = {"local-tts-dms-3": 12345}
+        running = {"local-tts-qwen-3": 12345}
         workload = {
             "pending_jobs": False,
             "delete_jobs": False,
@@ -104,7 +104,7 @@ class CompanionControlLoopTests(unittest.TestCase):
 
         self.assertEqual(resolved_workload, workload)
         self.assertIn("local-tts-qwen", desired_ids)
-        self.assertNotIn("local-tts-dms-3", desired_ids)
+        self.assertNotIn("local-tts-qwen-3", desired_ids)
 
     def test_pick_stack_ids_preserves_active_workers_even_above_requested_target(self) -> None:
         candidate_stacks = [

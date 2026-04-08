@@ -66,7 +66,6 @@ LLM_FACTORIES.update({
 # ==================== TTS REGISTRY ====================
 
 TTS_FACTORIES: dict[str, Callable[[], TTSBase]] = {
-    "dms": lambda: _factory(".tts_dms", "DMSTTSAdapter"),
     "qwen3-base": _qwen3_base_tts_factory,
     "gemini-tts-flash": _gemini_tts_flash_factory,
     "gemini-tts-pro": _gemini_tts_pro_factory,

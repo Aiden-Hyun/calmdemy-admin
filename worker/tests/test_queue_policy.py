@@ -68,7 +68,7 @@ class QueuePolicyTests(unittest.TestCase):
             supports_worker_payload(
                 {
                     "step_name": "synthesize_course_audio_chunk",
-                    "required_tts_model": "dms",
+                    "required_tts_model": "qwen3-base",
                 },
                 plan,
             )

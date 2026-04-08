@@ -24,7 +24,7 @@ def _cache_scope(job_data: dict) -> dict[str, str] | None:
         "content_job_id": content_job_id,
         "session_code": session_code,
         "tts_backend": str(job_data.get("ttsBackend") or "local").strip().lower() or "local",
-        "tts_model": str(job_data.get("ttsModel") or "dms").strip().lower() or "dms",
+        "tts_model": str(job_data.get("ttsModel") or "qwen3-base").strip().lower() or "qwen3-base",
         "tts_voice": str(job_data.get("ttsVoice") or "default").strip() or "default",
     }
 
