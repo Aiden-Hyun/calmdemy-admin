@@ -19,6 +19,12 @@ import {
   getDefaultVoice,
 } from '@features/admin/constants/models';
 import {
+  getStylesForContentType,
+  getTechniquesForContentType,
+  getTopicsForContentType,
+  getTechniqueLabel,
+} from '@features/admin/constants/contentOptions';
+import {
   getSubjects,
   checkCourseCodeExists,
   Subject,
@@ -343,6 +349,11 @@ export default function CreateContentScreen() {
     [ttsModel]
   );
 
+  const styleOptions = useMemo(() => getStylesForContentType(contentType), [contentType]);
+  const techniqueOptions = useMemo(() => getTechniquesForContentType(contentType), [contentType]);
+  const topicSuggestions = useMemo(() => getTopicsForContentType(contentType), [contentType]);
+  const techniqueLabel = useMemo(() => getTechniqueLabel(contentType), [contentType]);
+
   const buildDraftPayload = useCallback((): DraftPayload => ({
     contentType,
     title,
@@ -649,6 +660,10 @@ export default function CreateContentScreen() {
         difficultyOptions={DIFFICULTY_OPTIONS}
         audienceOptions={AUDIENCE_OPTIONS}
         toneOptions={TONE_OPTIONS}
+        styleOptions={styleOptions}
+        techniqueOptions={techniqueOptions}
+        techniqueLabel={techniqueLabel}
+        topicSuggestions={topicSuggestions}
       />
     </View>
   );

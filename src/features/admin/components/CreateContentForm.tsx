@@ -35,6 +35,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@core/providers/contexts/ThemeContext';
 import { Dropdown, DropdownOption } from './Dropdown';
 import { RadioGroup } from './RadioGroup';
+import { ChipGroup } from './ChipGroup';
 import { FactoryContentType, SubjectLevelCounts } from '../types';
 import { Theme } from '@/theme';
 
@@ -116,6 +117,12 @@ type Props = {
   difficultyOptions: DropdownOption[];
   audienceOptions: DropdownOption[];
   toneOptions: DropdownOption[];
+
+  // Content-type-specific options
+  styleOptions: DropdownOption[];
+  techniqueOptions: DropdownOption[];
+  techniqueLabel: string;
+  topicSuggestions: DropdownOption[];
 };
 
 export function CreateContentForm(props: Props) {
@@ -254,9 +261,29 @@ export function CreateContentForm(props: Props) {
       {!props.isFullSubject && (
         <>
           <Text style={styles.sectionTitle}>{props.isCourse ? 'Course Description' : 'Topic'}</Text>
+          {!props.isCourse && props.topicSuggestions.length > 0 && (
+            <View style={{ marginBottom: 8 }}>
+              <ChipGroup
+                options={props.topicSuggestions}
+                selected={
+                  props.topicSuggestions.some((o) => o.label === props.topic)
+                    ? [props.topicSuggestions.find((o) => o.label === props.topic)!.id]
+                    : []
+                }
+                onSelectionChange={(ids) => {
+                  if (ids.length > 0) {
+                    const option = props.topicSuggestions.find((o) => o.id === ids[0]);
+                    if (option) props.onTopicChange(option.label);
+                  } else {
+                    props.onTopicChange('');
+                  }
+                }}
+              />
+            </View>
+          )}
           <TextInput
             style={styles.input}
-            placeholder={props.isCourse ? 'Course description' : 'What should we generate?'}
+            placeholder={props.isCourse ? 'Course description' : 'Or type a custom topic...'}
             value={props.topic}
             onChangeText={props.onTopicChange}
           />
@@ -277,20 +304,75 @@ export function CreateContentForm(props: Props) {
       {isSingleContent && (
         <>
           <Text style={styles.sectionTitle}>Style</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="e.g. Calm, compassionate"
-            value={props.style}
-            onChangeText={props.onStyleChange}
-          />
+          {props.styleOptions.length > 0 ? (
+            <ChipGroup
+              options={props.styleOptions}
+              selected={
+                props.styleOptions.some((o) => o.label === props.style)
+                  ? [props.styleOptions.find((o) => o.label === props.style)!.id]
+                  : []
+              }
+              onSelectionChange={(ids) => {
+                if (ids.length > 0) {
+                  const option = props.styleOptions.find((o) => o.id === ids[0]);
+                  if (option) props.onStyleChange(option.label);
+                } else {
+                  props.onStyleChange('');
+                }
+              }}
+              customValue={
+                props.style && !props.styleOptions.some((o) => o.label === props.style)
+                  ? props.style
+                  : undefined
+              }
+              onCustomValueChange={props.onStyleChange}
+              customPlaceholder="e.g. Calm, compassionate"
+            />
+          ) : (
+            <TextInput
+              style={styles.input}
+              placeholder="e.g. Calm, compassionate"
+              value={props.style}
+              onChangeText={props.onStyleChange}
+            />
+          )}
 
-          <Text style={styles.sectionTitle}>Technique</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="e.g. Body scan, breath focus"
-            value={props.technique}
-            onChangeText={props.onTechniqueChange}
-          />
+          <Text style={styles.sectionTitle}>{props.techniqueLabel}</Text>
+          {props.techniqueOptions.length > 0 ? (
+            <ChipGroup
+              options={props.techniqueOptions}
+              selected={(() => {
+                const labels = props.technique.split(',').map((s) => s.trim()).filter(Boolean);
+                return props.techniqueOptions
+                  .filter((o) => labels.includes(o.label))
+                  .map((o) => o.id);
+              })()}
+              onSelectionChange={(ids) => {
+                const labels = ids
+                  .map((id) => props.techniqueOptions.find((o) => o.id === id)?.label)
+                  .filter(Boolean);
+                props.onTechniqueChange(labels.join(', '));
+              }}
+              multiSelect
+              customValue={
+                props.technique &&
+                !props.technique.split(',').map((s) => s.trim()).some((l) =>
+                  props.techniqueOptions.some((o) => o.label === l)
+                )
+                  ? props.technique
+                  : undefined
+              }
+              onCustomValueChange={props.onTechniqueChange}
+              customPlaceholder="e.g. Body scan, breath focus"
+            />
+          ) : (
+            <TextInput
+              style={styles.input}
+              placeholder="e.g. Body scan, breath focus"
+              value={props.technique}
+              onChangeText={props.onTechniqueChange}
+            />
+          )}
 
           <Text style={styles.sectionTitle}>Difficulty</Text>
           <RadioGroup
