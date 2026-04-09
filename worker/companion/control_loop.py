@@ -49,30 +49,15 @@ COMPANION_QUEUE_METRICS_INTERVAL_SEC = float(
 COMPANION_MEMORY_PROBE_TIMEOUT_SEC = float(
     os.getenv("COMPANION_MEMORY_PROBE_TIMEOUT_SEC", "1.5")
 )
-COMPANION_QWEN_MEMORY_GUARD_ENABLED = (
-    os.getenv("COMPANION_QWEN_MEMORY_GUARD_ENABLED", "true").strip().lower()
+COMPANION_MEMORY_GUARD_ENABLED = (
+    os.getenv("COMPANION_MEMORY_GUARD_ENABLED", "true").strip().lower()
     != "false"
 )
-COMPANION_QWEN_MEMORY_GUARD_SOFT_FREE_RATIO = float(
-    os.getenv("COMPANION_QWEN_MEMORY_GUARD_SOFT_FREE_RATIO", "0.28")
-)
-COMPANION_QWEN_MEMORY_GUARD_HARD_FREE_RATIO = float(
-    os.getenv("COMPANION_QWEN_MEMORY_GUARD_HARD_FREE_RATIO", "0.20")
-)
-COMPANION_QWEN_MEMORY_GUARD_CRITICAL_FREE_RATIO = float(
-    os.getenv("COMPANION_QWEN_MEMORY_GUARD_CRITICAL_FREE_RATIO", "0.14")
-)
-COMPANION_QWEN_MEMORY_GUARD_SOFT_MAX_STACKS = max(
-    0,
-    int(os.getenv("COMPANION_QWEN_MEMORY_GUARD_SOFT_MAX_STACKS", "2")),
-)
-COMPANION_QWEN_MEMORY_GUARD_HARD_MAX_STACKS = max(
-    0,
-    int(os.getenv("COMPANION_QWEN_MEMORY_GUARD_HARD_MAX_STACKS", "1")),
-)
-COMPANION_QWEN_MEMORY_GUARD_CRITICAL_MAX_STACKS = max(
-    0,
-    int(os.getenv("COMPANION_QWEN_MEMORY_GUARD_CRITICAL_MAX_STACKS", "0")),
+# Reserve this much RAM for the OS and non-worker processes.
+COMPANION_OS_RESERVE_MB = int(os.getenv("COMPANION_OS_RESERVE_MB", "2048"))
+# Emergency watchdog: if free memory drops below this ratio, evict idle workers.
+COMPANION_CRITICAL_FREE_RATIO = float(
+    os.getenv("COMPANION_CRITICAL_FREE_RATIO", "0.10")
 )
 
 ACTIVE_STATUSES = [
@@ -92,12 +77,6 @@ _MEMORY_PRESSURE_FREE_PERCENT_RE = re.compile(
 )
 
 
-def _stack_supports_qwen(stack: dict) -> bool:
-    for model in stack.get("ttsModels") or []:
-        normalized = str(model).strip().lower()
-        if normalized.startswith("qwen"):
-            return True
-    return False
 
 
 def _parse_memory_pressure_snapshot(output: str) -> Optional[dict]:
@@ -151,7 +130,7 @@ def _read_proc_meminfo_snapshot() -> Optional[dict]:
 
 
 def _system_memory_snapshot() -> Optional[dict]:
-    if not COMPANION_QWEN_MEMORY_GUARD_ENABLED:
+    if not COMPANION_MEMORY_GUARD_ENABLED:
         return None
 
     if sys.platform == "darwin":
@@ -170,21 +149,15 @@ def _system_memory_snapshot() -> Optional[dict]:
     return _read_proc_meminfo_snapshot()
 
 
-def _qwen_stack_cap_for_memory(snapshot: Optional[dict]) -> Optional[int]:
+def _available_memory_budget_mb(snapshot: Optional[dict]) -> Optional[int]:
+    """Return how many MB are available for workers after reserving OS headroom."""
     if not snapshot:
         return None
-
-    free_ratio = snapshot.get("freeRatio")
-    if free_ratio is None:
+    free_bytes = snapshot.get("freeBytes")
+    if free_bytes is None:
         return None
-
-    if free_ratio <= COMPANION_QWEN_MEMORY_GUARD_CRITICAL_FREE_RATIO:
-        return COMPANION_QWEN_MEMORY_GUARD_CRITICAL_MAX_STACKS
-    if free_ratio <= COMPANION_QWEN_MEMORY_GUARD_HARD_FREE_RATIO:
-        return COMPANION_QWEN_MEMORY_GUARD_HARD_MAX_STACKS
-    if free_ratio <= COMPANION_QWEN_MEMORY_GUARD_SOFT_FREE_RATIO:
-        return COMPANION_QWEN_MEMORY_GUARD_SOFT_MAX_STACKS
-    return None
+    free_mb = free_bytes / (1024 * 1024)
+    return max(0, int(free_mb - COMPANION_OS_RESERVE_MB))
 
 
 def _queue_metrics_bucket() -> dict:
@@ -648,60 +621,126 @@ def _pick_stack_ids(
     return additions
 
 
-def _apply_qwen_memory_guard(
+def _apply_memory_guard(
     enabled_stacks: list[dict],
     desired_ids: set[str],
     running: dict[str, int],
     active_owners: set[str],
 ) -> tuple[set[str], Optional[dict]]:
+    """Drop lowest-priority idle workers until the desired set fits in available memory."""
     snapshot = _system_memory_snapshot()
-    qwen_cap = _qwen_stack_cap_for_memory(snapshot)
-    if qwen_cap is None:
+    budget_mb = _available_memory_budget_mb(snapshot)
+    if budget_mb is None:
         return desired_ids, snapshot
 
-    qwen_candidate_stacks = [
-        stack
-        for stack in enabled_stacks
-        if _stack_supports_qwen(stack)
-        and (stack["id"] in desired_ids or stack["id"] in active_owners)
-    ]
-    if not qwen_candidate_stacks:
+    stacks_by_id = {stack["id"]: stack for stack in enabled_stacks}
+
+    def _mem(stack_id: str) -> int:
+        stack = stacks_by_id.get(stack_id)
+        return (stack.get("memoryPerWorkerMB") or 3000) if stack else 3000
+
+    total_desired_mb = sum(_mem(sid) for sid in desired_ids)
+    if total_desired_mb <= budget_mb:
         return desired_ids, snapshot
 
-    qwen_ids = {stack["id"] for stack in qwen_candidate_stacks}
-    base_desired_ids = {
-        stack_id for stack_id in desired_ids if stack_id not in qwen_ids
-    }
-    kept_qwen_ids = {
-        stack_id
-        for stack_id in active_owners
-        if stack_id in qwen_ids
-    }
-    if qwen_cap > len(kept_qwen_ids):
-        kept_qwen_ids.update(
-            _pick_stack_ids(
-                qwen_candidate_stacks,
-                needed_count=qwen_cap,
-                running_ids=set(running.keys()),
-                active_owners=active_owners,
-                selected_ids=base_desired_ids | kept_qwen_ids,
-            )
-        )
-    limited_desired_ids = base_desired_ids | kept_qwen_ids
+    # Classify desired workers into priority tiers (highest priority first):
+    # 1. Active (currently leasing a job) — never evict
+    # 2. Warm idle (running but no active job)
+    # 3. Cold (not yet running, about to spawn)
+    active_ids = {sid for sid in desired_ids if sid in active_owners}
+    warm_ids = {sid for sid in desired_ids if sid not in active_owners and sid in running}
+    cold_ids = {sid for sid in desired_ids if sid not in active_owners and sid not in running}
 
-    if limited_desired_ids != desired_ids:
+    # Evict from lowest priority first (cold, then warm), largest memory budget first.
+    eviction_order = (
+        sorted(cold_ids, key=lambda sid: _mem(sid), reverse=True)
+        + sorted(warm_ids, key=lambda sid: _mem(sid), reverse=True)
+    )
+
+    remaining = set(desired_ids)
+    current_mb = total_desired_mb
+    for sid in eviction_order:
+        if current_mb <= budget_mb:
+            break
+        remaining.discard(sid)
+        current_mb -= _mem(sid)
+
+    if remaining != desired_ids:
         logger.info(
-            "Companion reduced Qwen worker pool due to low free memory",
+            "Memory guard reduced worker pool to fit available budget",
             extra={
                 "free_ratio": snapshot.get("freeRatio") if snapshot else None,
-                "free_bytes": snapshot.get("freeBytes") if snapshot else None,
-                "qwen_cap": qwen_cap,
-                "desired_before": sorted(desired_ids & qwen_ids),
-                "desired_after": sorted(limited_desired_ids & qwen_ids),
+                "budget_mb": budget_mb,
+                "desired_mb": total_desired_mb,
+                "fitted_mb": current_mb,
+                "evicted": sorted(desired_ids - remaining),
+                "kept": sorted(remaining),
             },
         )
 
-    return limited_desired_ids, snapshot
+    return remaining, snapshot
+
+
+def _check_memory_pressure(
+    enabled_stacks: list[dict],
+    running: dict[str, int],
+    active_owners: set[str],
+) -> set[str]:
+    """Emergency watchdog: if free memory is critically low, pick idle workers to stop."""
+    snapshot = _system_memory_snapshot()
+    if not snapshot:
+        return set()
+
+    free_ratio = snapshot.get("freeRatio")
+    if free_ratio is None or free_ratio > COMPANION_CRITICAL_FREE_RATIO:
+        return set()
+
+    stacks_by_id = {stack["id"]: stack for stack in enabled_stacks}
+
+    # Find idle workers (running but not actively leasing a job).
+    idle_running = [
+        sid for sid in running
+        if sid not in active_owners and sid in stacks_by_id
+    ]
+    if not idle_running:
+        logger.warning(
+            "Memory pressure critical but all running workers are active — cannot evict",
+            extra={
+                "free_ratio": free_ratio,
+                "free_bytes": snapshot.get("freeBytes"),
+                "running": sorted(running.keys()),
+                "active_owners": sorted(active_owners),
+            },
+        )
+        return set()
+
+    # Evict largest-budget idle workers first until projected free memory recovers.
+    idle_running.sort(
+        key=lambda sid: stacks_by_id[sid].get("memoryPerWorkerMB", 3000),
+        reverse=True,
+    )
+
+    total_bytes = snapshot.get("totalBytes", 1)
+    free_bytes = snapshot.get("freeBytes", 0)
+    evict: set[str] = set()
+
+    for sid in idle_running:
+        evict.add(sid)
+        freed = stacks_by_id[sid].get("memoryPerWorkerMB", 3000) * 1024 * 1024
+        projected_free = free_bytes + freed
+        projected_ratio = projected_free / total_bytes
+        if projected_ratio > COMPANION_CRITICAL_FREE_RATIO:
+            break
+
+    logger.warning(
+        "Memory pressure watchdog evicting idle workers",
+        extra={
+            "free_ratio": free_ratio,
+            "free_bytes": snapshot.get("freeBytes"),
+            "evicting": sorted(evict),
+        },
+    )
+    return evict
 
 
 def _desired_auto_stack_ids(
@@ -775,7 +814,7 @@ def _desired_auto_stack_ids(
             )
         )
 
-    desired_ids, memory_snapshot = _apply_qwen_memory_guard(
+    desired_ids, memory_snapshot = _apply_memory_guard(
         enabled_stacks,
         desired_ids,
         running,
@@ -783,7 +822,7 @@ def _desired_auto_stack_ids(
     )
     if memory_snapshot:
         workload["system_memory"] = memory_snapshot
-        workload["qwen_stack_cap"] = _qwen_stack_cap_for_memory(memory_snapshot)
+        workload["memory_budget_mb"] = _available_memory_budget_mb(memory_snapshot)
 
     return desired_ids, workload
 
@@ -795,7 +834,7 @@ def _desired_running_stack_ids(
 ) -> tuple[set[str], dict]:
     workload = _collect_auto_workload(db)
     desired_ids = {stack["id"] for stack in enabled_stacks}
-    desired_ids, memory_snapshot = _apply_qwen_memory_guard(
+    desired_ids, memory_snapshot = _apply_memory_guard(
         enabled_stacks,
         desired_ids,
         running,
@@ -803,7 +842,7 @@ def _desired_running_stack_ids(
     )
     if memory_snapshot:
         workload["system_memory"] = memory_snapshot
-        workload["qwen_stack_cap"] = _qwen_stack_cap_for_memory(memory_snapshot)
+        workload["memory_budget_mb"] = _available_memory_budget_mb(memory_snapshot)
     return desired_ids, workload
 
 
@@ -1013,6 +1052,17 @@ def run_control_loop(db, poll_seconds: float, force_immediate_start: bool):
                 if not stack_def.get("enabled", True) and stack_def["id"] in running:
                     stacks.stop_worker(stack_def["id"])
                     running.pop(stack_def["id"], None)
+
+            # Emergency memory pressure watchdog — evict idle workers if RAM is critical.
+            # Active owners are not yet known so we pass an empty set; the watchdog
+            # only evicts workers that are running but not in active_owners, which
+            # conservatively means all running workers are candidates. The spawn-gate
+            # (_apply_memory_guard) later protects active workers during scaling.
+            pressure_evict = _check_memory_pressure(enabled_stacks, running, set())
+            for sid in pressure_evict:
+                if sid in running:
+                    stacks.stop_worker(sid)
+                    running.pop(sid, None)
 
             auto_desired_ids: set[str] = set()
             workload: dict | None = None

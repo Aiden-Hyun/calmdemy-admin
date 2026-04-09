@@ -13,6 +13,14 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKER_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
 DEFAULT_STACKS_FILE = os.path.join(WORKER_DIR, "worker_stacks.json")
 
+# Fallback memory budget (in MB) assigned to a worker when the stack config
+# doesn't specify memoryPerWorkerMB.  The memory guard in control_loop.py uses
+# this value to decide how many workers can run concurrently without exhausting
+# system RAM.  Tune this to the "typical" worker — stacks that are heavier
+# (e.g. image generation) or lighter (e.g. primary dispatch) should override
+# it in worker_stacks.json.
+DEFAULT_MEMORY_PER_WORKER_MB = 3000
+
 _DEFAULT_STACKS = [
     {
         "id": "local-primary",
@@ -132,6 +140,14 @@ def _normalize_stack(raw: dict, index: int) -> dict:
         # Backward-compatible wildcard for old single-stack setups.
         tts_models = ["*"]
 
+    # --- Memory budget per worker ---
+    # Each stack declares how many MB a single worker instance is expected to
+    # consume (model weights + inference scratch space).  The control loop's
+    # memory guard sums these budgets to decide whether the desired worker set
+    # fits in available RAM.  Clamped to >= 0; missing or non-numeric values
+    # fall back to DEFAULT_MEMORY_PER_WORKER_MB (3 000 MB).
+    memory_per_worker_mb = max(0, _as_int(raw.get("memoryPerWorkerMB"), DEFAULT_MEMORY_PER_WORKER_MB))
+
     return {
         "id": stack_id,
         "role": role or "v2",
@@ -142,6 +158,7 @@ def _normalize_stack(raw: dict, index: int) -> dict:
         "acceptNonTtsSteps": accept_non_tts,
         "ttsModels": tts_models,
         "extraCapabilityKeys": extra_capability_keys,
+        "memoryPerWorkerMB": memory_per_worker_mb,
     }
 
 
