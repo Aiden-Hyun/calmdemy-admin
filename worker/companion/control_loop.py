@@ -1,3 +1,52 @@
+"""
+============================================================
+control_loop.py — Worker Companion Control Loop (Orchestration Layer)
+============================================================
+
+Architectural Role:
+    Orchestration Layer — the "brain" of the companion process.  Runs an
+    infinite poll loop that decides which worker stacks should be alive at
+    any given moment.  It reads desired state from Firestore, inspects the
+    factory step queue for outstanding work, probes system memory, and
+    starts/stops worker processes accordingly.
+
+    Think of it as a **local Kubernetes scheduler** — but instead of pods
+    on nodes, it manages Python worker processes on a single macOS/Linux
+    machine, constrained by physical RAM.
+
+Design Patterns:
+    - Control Loop / Reconciliation Loop:  Every ``poll_seconds`` the loop
+      reads the *desired* state (from Firestore admin UI or the job
+      listener) and the *actual* state (running PIDs, queue depth, free
+      RAM), then takes the minimum set of actions to converge them.
+    - Strategy Pattern (implicit):  Three desired-state strategies —
+      "running" (all enabled stacks up), "auto" (scale to match queue
+      demand), and "stopped" (everything down).
+    - Two-Layer Memory Guard:
+        1. **Proactive spawn gate** (_apply_memory_guard) — before starting
+           workers, sums their declared memoryPerWorkerMB budgets against
+           available RAM and drops the lowest-priority workers that don't
+           fit.  Uses a greedy knapsack heuristic (evict cold→warm,
+           largest budget first).
+        2. **Reactive emergency watchdog** (_check_memory_pressure) — runs
+           every iteration *before* scaling decisions; if actual free memory
+           drops below a critical ratio (default 10 %), it force-evicts idle
+           workers to prevent OOM.
+    - Observer (Firestore listener):  The job listener (listener.py)
+      triggers wake events via ensure_running_wrapper, which this module
+      processes on the next iteration.
+
+Key Dependencies:
+    - Firebase Admin SDK (Firestore for state, queue, worker status)
+    - companion/stacks.py (start/stop worker subprocesses)
+    - companion/stack_config.py (normalized stack definitions)
+    - factory_v2 (queue capabilities, step watchdog, recovery manager)
+
+Consumed By:
+    - local_companion.py (entry point — calls run_control_loop)
+    - tests/test_companion_control_loop.py (unit tests for scaling logic)
+============================================================
+"""
 import os
 import random
 import re
@@ -27,10 +76,17 @@ from factory_v2.shared.queue_capabilities import capability_key_for_payload
 
 logger = get_logger(__name__)
 
+# ── Firestore collections used for coordination ──────────────────────────
+# worker_control: single doc ("local") holding desired/current state, set
+#   by the admin UI or the job listener.
+# factory_step_queue: individual pipeline steps waiting to be leased.
 CONTROL_COLLECTION = "worker_control"
 CONTROL_DOC_ID = "local"
 JOBS_COLLECTION = config.JOBS_COLLECTION
 QUEUE_COLLECTION = "factory_step_queue"
+
+# Step names that involve audio synthesis.  Used by queue metrics to bucket
+# steps into TTS vs. non-TTS categories for per-model tracking.
 SYNTH_STEP_NAMES = {
     "synthesize_audio",
     "synthesize_course_audio",
@@ -53,13 +109,28 @@ COMPANION_MEMORY_GUARD_ENABLED = (
     os.getenv("COMPANION_MEMORY_GUARD_ENABLED", "true").strip().lower()
     != "false"
 )
-# Reserve this much RAM for the OS and non-worker processes.
+# ── System-wide memory management knobs ──────────────────────────────────
+#
+# These two constants replace the old Qwen-specific env vars
+# (COMPANION_QWEN_MEMORY_GUARD_*).  The new design is model-agnostic:
+# every worker stack declares its own memoryPerWorkerMB in stack config,
+# and the control loop uses these two thresholds to decide what fits.
+#
+# COMPANION_OS_RESERVE_MB — headroom (in MB) set aside for the OS kernel,
+# Firestore emulator, companion process, etc.  _available_memory_budget_mb()
+# subtracts this from free RAM to get the budget workers can share.
 COMPANION_OS_RESERVE_MB = int(os.getenv("COMPANION_OS_RESERVE_MB", "2048"))
-# Emergency watchdog: if free memory drops below this ratio, evict idle workers.
+# COMPANION_CRITICAL_FREE_RATIO — emergency floor.  If the *actual* free
+# memory ratio drops below this value (default 10 %), the watchdog
+# (_check_memory_pressure) force-evicts idle workers regardless of the
+# normal scaling plan.  Acts as a safety net when worker memory usage
+# exceeds the declared budgets.
 COMPANION_CRITICAL_FREE_RATIO = float(
     os.getenv("COMPANION_CRITICAL_FREE_RATIO", "0.10")
 )
 
+# Firestore job statuses that indicate a job is actively being processed.
+# Used by has_pending_jobs() to decide whether workers should stay alive.
 ACTIVE_STATUSES = [
     "llm_generating",
     "qa_formatting",
@@ -80,6 +151,17 @@ _MEMORY_PRESSURE_FREE_PERCENT_RE = re.compile(
 
 
 def _parse_memory_pressure_snapshot(output: str) -> Optional[dict]:
+    """
+    Parse macOS ``memory_pressure -Q`` stdout into a normalized snapshot dict.
+
+    The command outputs lines like:
+        "The system has 17179869184 (4194304 pages with a page size of 4096)."
+        "System-wide memory free percentage: 42%"
+
+    We extract totalBytes and freeRatio so the memory guard can make
+    platform-agnostic decisions.  Returns None if the output doesn't match
+    the expected format (e.g. the command failed or format changed).
+    """
     total_match = _MEMORY_PRESSURE_TOTAL_BYTES_RE.search(output or "")
     free_match = _MEMORY_PRESSURE_FREE_PERCENT_RE.search(output or "")
     if total_match is None or free_match is None:
@@ -96,6 +178,13 @@ def _parse_memory_pressure_snapshot(output: str) -> Optional[dict]:
 
 
 def _read_proc_meminfo_snapshot() -> Optional[dict]:
+    """
+    Linux fallback: read /proc/meminfo to get total and available memory.
+
+    Uses ``MemAvailable`` (not ``MemFree``) because MemAvailable accounts for
+    reclaimable page cache and buffers — it's a better proxy for "memory a
+    new process could actually use" than raw free pages.
+    """
     try:
         with open("/proc/meminfo", "r", encoding="utf-8") as handle:
             lines = handle.readlines()
@@ -130,6 +219,15 @@ def _read_proc_meminfo_snapshot() -> Optional[dict]:
 
 
 def _system_memory_snapshot() -> Optional[dict]:
+    """
+    Platform dispatcher: probe system memory using the OS-appropriate method.
+
+    macOS → ``memory_pressure -Q`` (fast, no root required).
+    Linux → ``/proc/meminfo`` (always available).
+
+    Returns None if the guard is disabled or probing fails — callers
+    interpret None as "skip memory-based decisions" (fail-open).
+    """
     if not COMPANION_MEMORY_GUARD_ENABLED:
         return None
 
@@ -150,13 +248,24 @@ def _system_memory_snapshot() -> Optional[dict]:
 
 
 def _available_memory_budget_mb(snapshot: Optional[dict]) -> Optional[int]:
-    """Return how many MB are available for workers after reserving OS headroom."""
+    """
+    Return how many MB are available for workers after reserving OS headroom.
+
+    Replaces the old _qwen_stack_cap_for_memory() which only gated Qwen
+    workers.  This version is stack-agnostic: the caller (_apply_memory_guard)
+    sums up the per-stack memoryPerWorkerMB values and compares the total
+    against the budget returned here.
+
+    Returns None when memory probing is disabled or the snapshot is
+    unavailable, which signals callers to skip the guard entirely (fail-open).
+    """
     if not snapshot:
         return None
     free_bytes = snapshot.get("freeBytes")
     if free_bytes is None:
         return None
     free_mb = free_bytes / (1024 * 1024)
+    # Subtract the OS reserve so we only hand out what workers can safely use.
     return max(0, int(free_mb - COMPANION_OS_RESERVE_MB))
 
 
@@ -226,6 +335,17 @@ def _queue_metrics_capability_bucket(snapshot: dict, payload: dict) -> dict:
 
 
 def _collect_queue_metrics_snapshot(db) -> dict:
+    """
+    Snapshot the factory step queue into structured metrics for the admin UI.
+
+    Buckets steps by TTS model, capability key, and overall totals, tracking
+    ready/leased/running counts and the age of the oldest ready step.  Also
+    computes running-step age percentiles (p50/p95/max) per capability key
+    from worker_status heartbeats.
+
+    This is the data that powers the "Queue Health" section in the admin
+    dashboard — it's written to Firestore by update_stacks_status().
+    """
     now = datetime.now(timezone.utc)
     snapshot = {
         "capturedAt": now,
@@ -362,7 +482,14 @@ def update_stacks_status(
     running: dict[str, int],
     queue_metrics: dict | None = None,
 ) -> None:
-    """Write aggregate status for all stacks (for admin UI)."""
+    """
+    Write aggregate stack status + queue metrics to Firestore for the admin UI.
+
+    The admin dashboard reads ``worker_stacks_status/local`` to display which
+    stacks are running, their capabilities, PIDs, and queue health.  This is
+    a denormalized view — easier for the React frontend to consume than
+    joining multiple collections.
+    """
     doc_ref = db.collection("worker_stacks_status").document("local")
     stack_entries = []
     now = datetime.now(timezone.utc)
@@ -456,6 +583,14 @@ def _queue_payload_counts_as_live_work(
     worker_status_by_id: dict[str, dict],
     now: datetime,
 ) -> bool:
+    """
+    Determine if a queue entry represents genuine in-progress or pending work.
+
+    A step that's "leased" or "running" only counts if its owner worker has
+    a fresh heartbeat — otherwise the worker likely crashed and the step is
+    orphaned (the recovery manager will handle it separately).  "ready"
+    steps always count because they're waiting for a worker to pick them up.
+    """
     state = str(payload.get("state") or "").strip().lower()
     if state == "ready":
         return True
@@ -485,6 +620,19 @@ def _collect_auto_workload_from_payloads(
     worker_status_by_id: dict[str, dict],
     now: datetime,
 ) -> dict:
+    """
+    Classify queued work into demand buckets the auto-scaler can act on.
+
+    Scans the factory step queue and counts outstanding steps per category:
+      - non_tts_outstanding: script generation, formatting, upload, etc.
+      - image_outstanding: image generation steps.
+      - tts_outstanding: per-model TTS step counts (e.g. {"qwen3-base": 3}).
+      - wildcard_tts_outstanding: TTS steps with no specific model preference.
+      - active_owners: set of worker IDs currently leasing a step.
+
+    The active_owners set is critical for the memory guard — workers in this
+    set are never evicted, even under memory pressure.
+    """
     tts_outstanding: dict[str, int] = defaultdict(int)
     wildcard_tts_outstanding = 0
     non_tts_outstanding = 0
@@ -540,6 +688,13 @@ def _collect_auto_workload_from_payloads(
 
 
 def _collect_auto_workload(db) -> dict:
+    """
+    Full workload snapshot: queue demand + pending/delete jobs from Firestore.
+
+    Combines step-queue analysis (from _collect_auto_workload_from_payloads)
+    with job-level checks (has_pending_jobs, has_delete_requested_jobs) to
+    produce the workload dict consumed by _desired_auto_stack_ids().
+    """
     now = datetime.now(timezone.utc)
     queue_payloads = _load_queue_payloads(db)
     worker_status_by_id = {
@@ -572,6 +727,14 @@ def _ordered_candidate_ids(
     running_ids: set[str],
     active_owners: set[str],
 ) -> list[str]:
+    """
+    Sort candidate stacks into priority order: active → warm → cold.
+
+    This ordering drives a "prefer reuse" heuristic — we'd rather give work
+    to a worker that's already loaded into memory (warm) than spawn a fresh
+    one (cold), and we never preempt a worker that's actively processing a
+    job (active).
+    """
     active = [stack["id"] for stack in candidate_stacks if stack["id"] in active_owners]
     warm = [
         stack["id"]
@@ -589,6 +752,15 @@ def _pick_stack_ids(
     active_owners: set[str],
     selected_ids: set[str],
 ) -> list[str]:
+    """
+    Select up to ``needed_count`` stacks from candidates, respecting priority.
+
+    Key invariant: active workers (those currently leasing a job) are *always*
+    kept, even if that pushes the count above ``needed_count``.  This prevents
+    killing a worker mid-job just because the scaler thinks fewer are needed.
+
+    Returns only the *newly added* IDs (not those already in selected_ids).
+    """
     if needed_count <= 0 or not candidate_stacks:
         return []
 
@@ -627,36 +799,58 @@ def _apply_memory_guard(
     running: dict[str, int],
     active_owners: set[str],
 ) -> tuple[set[str], Optional[dict]]:
-    """Drop lowest-priority idle workers until the desired set fits in available memory."""
+    """
+    Pre-spawn gate: drop lowest-priority idle workers until the desired set
+    fits in available memory.
+
+    Replaces the old _apply_qwen_memory_guard() which only governed Qwen
+    TTS workers.  This version is **stack-agnostic** — it uses each stack's
+    memoryPerWorkerMB to build a cost model, then greedily evicts the
+    cheapest-to-lose workers until total cost ≤ budget.
+
+    Priority tiers (never violated):
+      1. Active workers (currently leasing a job) — **never** evicted.
+      2. Warm idle (process alive, no active job) — evicted second.
+      3. Cold (not yet spawned) — evicted first, since no process to kill.
+
+    Within each tier, the largest-budget worker is evicted first so we
+    free the most memory per eviction (greedy knapsack heuristic).
+
+    Returns the (possibly reduced) set of desired IDs and the memory
+    snapshot used, so callers can log it or attach it to workload metadata.
+    """
     snapshot = _system_memory_snapshot()
     budget_mb = _available_memory_budget_mb(snapshot)
     if budget_mb is None:
+        # Memory probing unavailable — fail open and let all desired workers run.
         return desired_ids, snapshot
 
     stacks_by_id = {stack["id"]: stack for stack in enabled_stacks}
 
     def _mem(stack_id: str) -> int:
+        """Look up the declared memory budget for a stack, defaulting to 3 GB."""
         stack = stacks_by_id.get(stack_id)
         return (stack.get("memoryPerWorkerMB") or 3000) if stack else 3000
 
+    # --- Fast path: everything fits, no eviction needed ---
     total_desired_mb = sum(_mem(sid) for sid in desired_ids)
     if total_desired_mb <= budget_mb:
         return desired_ids, snapshot
 
-    # Classify desired workers into priority tiers (highest priority first):
-    # 1. Active (currently leasing a job) — never evict
-    # 2. Warm idle (running but no active job)
-    # 3. Cold (not yet running, about to spawn)
+    # --- Classify desired workers into priority tiers ---
     active_ids = {sid for sid in desired_ids if sid in active_owners}
     warm_ids = {sid for sid in desired_ids if sid not in active_owners and sid in running}
     cold_ids = {sid for sid in desired_ids if sid not in active_owners and sid not in running}
 
-    # Evict from lowest priority first (cold, then warm), largest memory budget first.
+    # Build eviction order: cold first (cheapest to drop — no process to kill),
+    # then warm idle.  Within each tier, largest budget first (greedy: maximize
+    # freed memory per eviction step).
     eviction_order = (
         sorted(cold_ids, key=lambda sid: _mem(sid), reverse=True)
         + sorted(warm_ids, key=lambda sid: _mem(sid), reverse=True)
     )
 
+    # --- Greedy eviction loop ---
     remaining = set(desired_ids)
     current_mb = total_desired_mb
     for sid in eviction_order:
@@ -686,18 +880,37 @@ def _check_memory_pressure(
     running: dict[str, int],
     active_owners: set[str],
 ) -> set[str]:
-    """Emergency watchdog: if free memory is critically low, pick idle workers to stop."""
+    """
+    Emergency watchdog: if free memory is critically low, pick idle workers
+    to stop.
+
+    This is a **reactive** safety net that runs every control-loop iteration,
+    independent of the normal scaling plan.  It catches cases where actual
+    worker memory usage exceeds the declared memoryPerWorkerMB budgets (e.g.
+    an image model loading an unexpectedly large checkpoint).
+
+    Complementary to _apply_memory_guard (proactive / pre-spawn):
+      • _apply_memory_guard — decides what *should* run based on declared budgets.
+      • _check_memory_pressure — reacts to what *is* happening based on real
+        free-memory readings from the OS.
+
+    Returns the set of stack IDs that should be force-stopped.  The caller
+    (run_control_loop) is responsible for actually killing the processes.
+    """
     snapshot = _system_memory_snapshot()
     if not snapshot:
         return set()
 
     free_ratio = snapshot.get("freeRatio")
     if free_ratio is None or free_ratio > COMPANION_CRITICAL_FREE_RATIO:
+        # Memory is fine — nothing to do.
         return set()
 
     stacks_by_id = {stack["id"]: stack for stack in enabled_stacks}
 
-    # Find idle workers (running but not actively leasing a job).
+    # Only idle workers (running but not actively leasing a job) are eligible
+    # for eviction.  Active workers are never killed — we'd rather OOM than
+    # corrupt a half-finished job.
     idle_running = [
         sid for sid in running
         if sid not in active_owners and sid in stacks_by_id
@@ -714,7 +927,10 @@ def _check_memory_pressure(
         )
         return set()
 
-    # Evict largest-budget idle workers first until projected free memory recovers.
+    # Greedy eviction: largest-budget idle workers first, so we reclaim the
+    # most memory per kill.  We project how much free memory each eviction
+    # would recover (assuming the worker actually frees its declared budget)
+    # and stop once we've crossed back above the critical threshold.
     idle_running.sort(
         key=lambda sid: stacks_by_id[sid].get("memoryPerWorkerMB", 3000),
         reverse=True,
@@ -748,6 +964,18 @@ def _desired_auto_stack_ids(
     enabled_stacks: list[dict],
     running: dict[str, int],
 ) -> tuple[set[str], dict]:
+    """
+    Core auto-scaler: determine which stack IDs should be running right now.
+
+    Walks each demand category (non-TTS, image, per-model TTS, wildcard TTS)
+    and picks the minimum set of stacks that can serve the outstanding work.
+    Then passes the desired set through _apply_memory_guard() to ensure the
+    total memory footprint fits in available RAM.
+
+    Returns:
+        desired_ids: Stack IDs that should be alive after this iteration.
+        workload: The full workload snapshot (for logging / admin UI).
+    """
     workload = _collect_auto_workload(db)
     running_ids = set(running.keys())
     active_owners = workload["active_owners"]
@@ -832,6 +1060,13 @@ def _desired_running_stack_ids(
     enabled_stacks: list[dict],
     running: dict[str, int],
 ) -> tuple[set[str], dict]:
+    """
+    "Running" mode scaler: all enabled stacks should be up, subject to memory.
+
+    Unlike auto mode, this doesn't look at queue demand — the admin has
+    explicitly requested everything on.  The memory guard still applies
+    though, so on a RAM-constrained machine some stacks may be dropped.
+    """
     workload = _collect_auto_workload(db)
     desired_ids = {stack["id"] for stack in enabled_stacks}
     desired_ids, memory_snapshot = _apply_memory_guard(
@@ -847,6 +1082,13 @@ def _desired_running_stack_ids(
 
 
 def _normalize_desired_state(db, control: dict) -> str:
+    """
+    Canonicalize the desiredState from the control doc.
+
+    Special case: if the state is "running" but was set by the wake-dispatcher
+    (i.e. a job arrived), auto-promote to "auto" mode.  This prevents the
+    system from staying in forced-running mode indefinitely after a single wake.
+    """
     desired_state = str(control.get("desiredState") or "stopped").strip().lower() or "stopped"
     requested_by = str(control.get("requestedBy") or "").strip().lower()
 
@@ -865,6 +1107,17 @@ def _normalize_desired_state(db, control: dict) -> str:
 
 
 def _recover_running_course_pipeline_gaps(db) -> dict[str, int]:
+    """
+    Periodically scan for stuck pipeline steps and recycle their workers.
+
+    The recovery manager detects steps that have been "running" longer than
+    the heartbeat timeout — which means the worker likely crashed or hung.
+    For each stuck step, we stop and restart the owning worker (recycle)
+    and re-queue the step so another worker can pick it up.
+
+    This is the companion's self-healing mechanism — without it, a single
+    worker crash could leave a job permanently stuck.
+    """
     from factory_v2.application.orchestrator import Orchestrator
     from factory_v2.infrastructure.firestore_repos import (
         FirestoreEventRepo,
@@ -928,6 +1181,14 @@ def _recover_running_course_pipeline_gaps(db) -> dict[str, int]:
 
 
 def ensure_running_wrapper(db, force_immediate_start: bool):
+    """
+    Wake handler called by the Firestore job listener when new work arrives.
+
+    Bridges the listener (listener.py) and the control loop: sets the
+    desired state to "running" or "auto" in Firestore, and optionally
+    starts workers immediately (force_immediate_start=True) so the first
+    step doesn't wait for the next poll interval.
+    """
     control = get_control(db)
     current_desired = _normalize_desired_state(db, control)
     next_desired = "running" if current_desired == "running" else "auto"
@@ -985,6 +1246,29 @@ def ensure_running_wrapper(db, force_immediate_start: bool):
 
 
 def run_control_loop(db, poll_seconds: float, force_immediate_start: bool):
+    """
+    Main reconciliation loop — runs forever until KeyboardInterrupt.
+
+    Each iteration:
+      1. Read desired state from Firestore control doc.
+      2. Periodically run pipeline recovery (self-healing for stuck steps).
+      3. Reload stack config and collect running PIDs.
+      4. Publish queue metrics + log tails to Firestore (for admin UI).
+      5. Stop any disabled stacks that are still running.
+      6. Run the emergency memory watchdog (reactive eviction).
+      7. Based on desired state, compute desired stack IDs:
+         - "running" → all enabled stacks (capped by memory guard).
+         - "auto"    → only stacks needed for current queue demand.
+         - "stopped" → nothing.
+      8. Start missing stacks, stop excess stacks, update control doc.
+      9. Sleep with random jitter to prevent thundering herd on restarts.
+
+    Args:
+        db: Firestore client.
+        poll_seconds: Base sleep between iterations.
+        force_immediate_start: If True, start stacks on the very first
+            iteration without waiting for a full poll cycle.
+    """
     last_activity_ts = time.time()
     last_factory_recovery_ts = 0.0
     last_queue_metrics_ts = 0.0
@@ -1053,11 +1337,13 @@ def run_control_loop(db, poll_seconds: float, force_immediate_start: bool):
                     stacks.stop_worker(stack_def["id"])
                     running.pop(stack_def["id"], None)
 
-            # Emergency memory pressure watchdog — evict idle workers if RAM is critical.
-            # Active owners are not yet known so we pass an empty set; the watchdog
-            # only evicts workers that are running but not in active_owners, which
-            # conservatively means all running workers are candidates. The spawn-gate
-            # (_apply_memory_guard) later protects active workers during scaling.
+            # ── Emergency memory pressure watchdog ──────────────────────────
+            # Runs every loop iteration *before* the scaling decision.  We pass
+            # an empty active_owners set because we haven't queried workload yet;
+            # this is intentionally conservative — every running worker is treated
+            # as idle and therefore eviction-eligible.  The normal spawn-gate
+            # (_apply_memory_guard) runs later with real active_owners and will
+            # protect workers that are actually processing jobs.
             pressure_evict = _check_memory_pressure(enabled_stacks, running, set())
             for sid in pressure_evict:
                 if sid in running:
@@ -1214,6 +1500,8 @@ def run_control_loop(db, poll_seconds: float, force_immediate_start: bool):
                 else:
                     update_control(db, {"currentState": "stopped", "workerPid": None})
 
+            # Random jitter ±0.3s prevents multiple companion restarts from
+            # synchronizing their poll cycles and hammering Firestore in lockstep.
             jitter = random.uniform(-0.3, 0.3)
             time.sleep(max(0.5, poll_seconds + jitter))
 
