@@ -23,7 +23,7 @@
     "id": "local-tts-qwen",
     "role": "tts",
     "venv": ".venv-qwen",
-    "replicas": 7,
+    "replicas": 5,
     "enabled": true,
     "dispatch": false,
     "acceptNonTtsSteps": false,

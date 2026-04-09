@@ -4,6 +4,7 @@ from __future__ import annotations
 
 TTS_STEP_NAMES = {
     "synthesize_audio",
+    "synthesize_audio_chunk",
     "synthesize_course_audio",
     "synthesize_course_audio_chunk",
 }
