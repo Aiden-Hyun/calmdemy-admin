@@ -1,5 +1,26 @@
-"""
-Step 3: Generate a thumbnail image using a local diffusion model.
+"""Step 3 -- Generate a thumbnail image using a local diffusion model.
+
+Architectural Role:
+    Produces a JPEG thumbnail for each piece of content.  Two backends are
+    supported:
+
+    * **diffusers** (default) -- loads a HuggingFace diffusion pipeline
+      (Stable Diffusion, SDXL-Turbo, Flux, etc.) and runs inference on the
+      worker's GPU/MPS/CPU.
+    * **coreml** -- delegates to Apple's ``python_coreml_stable_diffusion``
+      CLI for optimized on-device inference on Apple Silicon Macs.
+
+    The module also contains ``build_image_prompt``, which asks the LLM to
+    craft a concise visual prompt when the job does not already have one.
+
+Key Dependencies:
+    - torch, diffusers, PIL     -- for the ``diffusers`` backend
+    - config.IMAGE_*            -- model ID, dimensions, inference steps, etc.
+    - models.registry / config  -- model weight locations
+    - llm_generator._get_llm_adapter -- used by ``build_image_prompt``
+
+Consumed By:
+    - factory_v2 pipeline steps ``generate_image`` / ``generate_course_thumbnail``
 """
 
 import gc
@@ -16,39 +37,54 @@ from observability import get_logger
 
 logger = get_logger(__name__)
 
+# ---------------------------------------------------------------------------
+# Pipeline caching -- keeps a loaded diffusion pipeline in memory to avoid
+# the costly model-loading step on sequential image jobs.
+# ---------------------------------------------------------------------------
 _cached_pipe = None
 _cached_pipeline_class = None
 _cached_model_id = None
 _cached_device = None
 _cached_dtype = None
 
+# Fallback thumbnail URL used when all generation attempts fail
 DEFAULT_FALLBACK_URL = (
     "https://images.unsplash.com/photo-1506126613408-eca07ce68773?w=800&q=80"
 )
 
 
 def _normalize_model_id(model_id: str | None = None) -> str:
+    """Return a cleaned model ID string, falling back to the config default."""
     return str(model_id or config.IMAGE_MODEL_ID or "").strip()
 
 
 def _image_backend() -> str:
+    """Return ``"diffusers"`` or ``"coreml"`` based on config."""
     return str(getattr(config, "IMAGE_BACKEND", "diffusers") or "diffusers").strip().lower()
 
 
 def _model_cache_dir(model_id: str | None = None) -> str:
+    """Build a filesystem-safe cache directory path for a diffusion model."""
     normalized = _normalize_model_id(model_id)
+    # Replace slashes, spaces, etc. with double-dashes for a safe dirname
     safe_name = re.sub(r"[^A-Za-z0-9._-]+", "--", normalized).strip("-") or "default"
     return os.path.join(config.MODEL_DIR, "image_models", safe_name)
 
 
 def _model_generation_defaults(model_id: str | None = None) -> dict[str, object]:
+    """Return per-model generation parameter overrides.
+
+    Turbo models (SD-Turbo, SDXL-Turbo) use a single inference step with
+    zero guidance scale and a smaller resolution -- these settings are baked
+    into the distilled checkpoint and must not be overridden.
+    """
     model_lower = _normalize_model_id(model_id).lower()
     if "sd-turbo" in model_lower or "sdxl-turbo" in model_lower:
         return {
             "preferred_width": 384,
             "preferred_height": 384,
-            "num_inference_steps": 1,
-            "guidance_scale": 0.0,
+            "num_inference_steps": 1,     # Turbo models are single-step
+            "guidance_scale": 0.0,        # CFG is disabled in turbo distillation
             "supports_negative_prompt": False,
         }
     return {
@@ -61,11 +97,18 @@ def _model_generation_defaults(model_id: str | None = None) -> dict[str, object]
 
 
 def _pipeline_pretrained_kwargs(model_id: str, dtype) -> dict[str, object]:
+    """Build the keyword arguments dict for ``from_pretrained``.
+
+    Notable decisions:
+    - ``low_cpu_mem_usage=False`` and ``device_map=None`` disable the
+      accelerate meta-tensor path which can crash on MPS/CPU.
+    - Turbo checkpoints with fp16 use the ``variant="fp16"`` kwarg to
+      load the half-precision safetensors directly.
+    """
     model_lower = _normalize_model_id(model_id).lower()
     kwargs: dict[str, object] = {
         "torch_dtype": dtype,
         "cache_dir": _model_cache_dir(model_id),
-        # Avoid meta-tensor loading paths that can break on MPS/CPU.
         "low_cpu_mem_usage": False,
         "device_map": None,
     }
@@ -77,11 +120,20 @@ def _pipeline_pretrained_kwargs(model_id: str, dtype) -> dict[str, object]:
 
 
 def _load_pretrained_pipeline(PipelineClass, model_id: str, kwargs: dict[str, object]):
+    """Load a diffusion pipeline with automatic fallback for known edge cases.
+
+    Two fallback paths are handled:
+    1. **Flux checkpoints** may omit optional sub-models (text_encoder_2,
+       image_encoder, etc.).  If ``from_pretrained`` raises ``ValueError``
+       mentioning those components, we retry with them set to ``None``.
+    2. **Turbo fp16 variant** -- if the fp16 safetensors are not available,
+       we retry without the ``variant`` kwarg to load the default weights.
+    """
     model_lower = _normalize_model_id(model_id).lower()
     try:
         return PipelineClass.from_pretrained(model_id, **kwargs)
     except ValueError as e:
-        # Some Flux checkpoints omit optional components; retry with explicit None for FluxPipeline.
+        # Fallback 1: Flux models with missing optional components
         if PipelineClass.__name__ != "FluxPipeline":
             raise
         msg = str(e)
@@ -97,6 +149,7 @@ def _load_pretrained_pipeline(PipelineClass, model_id: str, kwargs: dict[str, ob
             **kwargs,
         )
     except OSError:
+        # Fallback 2: fp16 variant not available for turbo models
         if "variant" not in kwargs or not ("sd-turbo" in model_lower or "sdxl-turbo" in model_lower):
             raise
         fallback_kwargs = dict(kwargs)
@@ -105,18 +158,30 @@ def _load_pretrained_pipeline(PipelineClass, model_id: str, kwargs: dict[str, ob
 
 
 def _get_device() -> str:
+    """Select the best available PyTorch device (MPS on Apple Silicon, else CPU)."""
     if torch.backends.mps.is_available():
         return "mps"
     return "cpu"
 
 
 def _get_dtype(device: str):
+    """Choose the floating-point precision for the given device.
+
+    MPS benefits from fp16 (faster and lower VRAM), while CPU typically
+    needs fp32 for numerical stability.
+    """
     if device == "mps":
         return torch.float16
     return torch.float32
 
 
 def _load_pipe():
+    """Load (or return cached) the diffusion pipeline, applying memory optimizations.
+
+    The cache is keyed on (PipelineClass, model_id, device, dtype).  When
+    caching is disabled (``IMAGE_PIPELINE_CACHE_ENABLED=False``), the
+    pipeline is released after each image generation to free VRAM.
+    """
     global _cached_pipe, _cached_pipeline_class, _cached_model_id, _cached_device, _cached_dtype
 
     model_id = _normalize_model_id()
@@ -141,13 +206,14 @@ def _load_pipe():
         pipe.to(device)
         pipe.set_progress_bar_config(disable=True)
 
-        # Memory optimizations
+        # Memory optimizations -- these reduce peak VRAM usage at the cost of
+        # slightly slower inference, critical for running on consumer GPUs.
         if hasattr(pipe, "enable_attention_slicing"):
-            pipe.enable_attention_slicing()
+            pipe.enable_attention_slicing()   # Compute attention in chunks
         if hasattr(pipe, "enable_vae_slicing"):
-            pipe.enable_vae_slicing()
+            pipe.enable_vae_slicing()         # Decode latents in slices
         if hasattr(pipe, "enable_vae_tiling"):
-            pipe.enable_vae_tiling()
+            pipe.enable_vae_tiling()          # Tile the VAE decode for large images
 
         if cache_enabled:
             _cached_pipe = pipe
@@ -163,6 +229,7 @@ def _load_pipe():
 
 
 def _clear_cached_pipe_state() -> None:
+    """Reset all cached pipeline globals to ``None``."""
     global _cached_pipe, _cached_pipeline_class, _cached_model_id, _cached_device, _cached_dtype
     _cached_pipe = None
     _cached_pipeline_class = None
@@ -172,6 +239,7 @@ def _clear_cached_pipe_state() -> None:
 
 
 def _release_cached_pipe() -> None:
+    """Unload the cached pipeline and reclaim GPU/MPS memory."""
     pipe = _cached_pipe
     _clear_cached_pipe_state()
     if pipe is not None:
@@ -180,6 +248,12 @@ def _release_cached_pipe() -> None:
 
 
 def _empty_runtime_cache() -> None:
+    """Best-effort GPU/MPS memory reclamation.
+
+    ``gc.collect()`` triggers Python's garbage collector to free any
+    lingering tensors, then we ask the CUDA / MPS runtime to release
+    its internal caches back to the OS.
+    """
     try:
         gc.collect()
     except Exception:
@@ -201,6 +275,12 @@ def _empty_runtime_cache() -> None:
 
 
 def _resolve_pipeline_class(model_id: str):
+    """Select the correct diffusers Pipeline class based on the model name.
+
+    - Flux 2.x models -> ``Flux2Pipeline`` (or ``Flux2KleinPipeline``)
+    - Flux 1.x models -> ``FluxPipeline``
+    - Everything else  -> ``AutoPipelineForText2Image`` (SD, SDXL, etc.)
+    """
     model_lower = (model_id or "").lower()
     if "flux.2" in model_lower:
         try:
@@ -233,6 +313,12 @@ def _generate_image_coreml(
     num_inference_steps: int,
     guidance_scale: float,
 ) -> str:
+    """Generate an image via Apple's Core ML Stable Diffusion CLI.
+
+    Shells out to a separate Python environment (configured via
+    ``IMAGE_COREML_PYTHON``) that has the Core ML optimized pipeline
+    compiled.  The generated PNG is found by scanning the output directory.
+    """
     python_exec = str(getattr(config, "IMAGE_COREML_PYTHON", "") or "").strip()
     resources_dir = str(getattr(config, "IMAGE_COREML_RESOURCES_DIR", "") or "").strip()
     model_version = str(
@@ -312,6 +398,12 @@ def _generate_image_diffusers(
     num_inference_steps: int,
     guidance_scale: float,
 ) -> str:
+    """Generate an image using the HuggingFace diffusers pipeline.
+
+    Returns the local path to a saved JPEG thumbnail (quality=85).
+    The pipeline and intermediate tensors are cleaned up in ``finally``
+    to avoid VRAM leaks when caching is disabled.
+    """
     pipe = _load_pipe()
     cache_enabled = bool(config.IMAGE_PIPELINE_CACHE_ENABLED)
     result = None
@@ -356,7 +448,16 @@ def generate_image(
     num_inference_steps: int | None = None,
     guidance_scale: float | None = None,
 ) -> str:
-    """Generate an image from a prompt and return local file path."""
+    """Generate an image from a text prompt and return the local file path.
+
+    Parameters cascade through three layers of precedence:
+        1. Explicit arguments passed by the caller.
+        2. Per-model defaults (e.g. turbo models force 1 step).
+        3. Global ``config`` values (IMAGE_WIDTH, IMAGE_STEPS, etc.).
+
+    Returns:
+        Path to the generated JPEG (diffusers) or PNG (coreml) file.
+    """
     model_defaults = _model_generation_defaults()
 
     width = width or int(model_defaults.get("preferred_width") or config.IMAGE_WIDTH)
@@ -393,11 +494,13 @@ def generate_image(
 
 
 def _clean_prompt_fragment(value: object) -> str:
+    """Collapse whitespace and strip trailing punctuation from a metadata value."""
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     return text.rstrip(".,;: ")
 
 
 def _collect_course_plan_highlights(plan: dict | None) -> list[str]:
+    """Extract up to 6 short context lines from a course plan for the image prompt."""
     if not isinstance(plan, dict):
         return []
 
@@ -430,6 +533,7 @@ def _collect_course_plan_highlights(plan: dict | None) -> list[str]:
 
 
 def _fallback_image_prompt(job_data: dict, title: str, topic: str, content_type: str, plan: dict | None = None) -> str:
+    """Build a deterministic image prompt when the LLM prompt-generation fails."""
     params = job_data.get("params", {}) or {}
     goal = _clean_prompt_fragment((plan or {}).get("courseGoal"))
     subject = _clean_prompt_fragment(params.get("subjectLabel"))
@@ -465,7 +569,13 @@ def build_image_prompt(
     *,
     ignore_saved_prompt: bool = False,
 ) -> str:
-    """Generate or return an image prompt for a job."""
+    """Generate or return an image prompt for a job.
+
+    Precedence:
+        1. ``job_data["imagePrompt"]`` -- if the admin already wrote one.
+        2. LLM-generated prompt -- asks the LLM for a concise visual concept.
+        3. ``_fallback_image_prompt`` -- deterministic template if LLM fails.
+    """
     image_prompt = (job_data.get("imagePrompt") or "").strip()
     if image_prompt and not ignore_saved_prompt:
         return image_prompt

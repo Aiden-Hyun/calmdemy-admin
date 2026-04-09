@@ -1,4 +1,38 @@
-"""Subject workflow steps that plan, launch, and supervise child course jobs."""
+"""Subject workflow steps that plan, launch, and supervise child course jobs.
+
+Architectural Role:
+    Pipeline Step -- implements the **subject pipeline**, which orchestrates
+    the creation of multiple courses under a single therapy subject (e.g.
+    "Cognitive Behavioral Therapy").  The three steps are:
+    (1) ``generate_subject_plan`` -- uses an LLM to produce a lineup of
+        courses across difficulty levels (100-400),
+    (2) ``launch_subject_children`` -- creates child ``content_jobs``
+        documents in Firestore for each course,
+    (3) ``watch_subject_children`` -- polls child jobs, launches more as
+        slots free up, and decides whether to requeue or terminate.
+
+Design Patterns:
+    * **Supervisor / Child-Job Orchestration** -- the subject job is a
+      *parent* that creates and monitors independent *child* course jobs.
+      Each child runs the full course pipeline autonomously.
+    * **Bounded Concurrency** -- ``max_active_children`` limits how many
+      child jobs run simultaneously, preventing resource exhaustion.
+    * **Self-Healing LLM Loop** -- ``_build_subject_plan`` retries up to
+      ``MAX_SUBJECT_PLAN_ATTEMPTS`` times, sending repair prompts that
+      include already-accepted courses and the specific missing counts.
+    * **Polling via Requeue** -- ``watch_subject_children`` returns
+      ``requeue_after_seconds=15`` so the claim loop schedules another
+      poll, rather than busy-waiting.
+
+Key Dependencies:
+    * ``factory_v2.shared.llm_generator`` -- LLM adapter for plan generation
+    * ``course_common`` -- shared job extractors
+    * Firestore -- child-job creation, subject document reads
+
+Consumed By:
+    * ``registry.py`` -- maps ``generate_subject_plan``,
+      ``launch_subject_children``, ``watch_subject_children`` here.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +48,11 @@ from .base import StepContext, StepResult
 from .course_common import _content_job_data, _content_job_id, _runtime
 
 
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+# Default child-job status counters (zero state).
 DEFAULT_CHILD_COUNTS = {
     "pending": 0,
     "running": 0,
@@ -21,6 +60,7 @@ DEFAULT_CHILD_COUNTS = {
     "failed": 0,
 }
 
+# Statuses that mean a child course job is still in progress.
 ACTIVE_CHILD_STATUSES = {
     "pending",
     "llm_generating",
@@ -33,12 +73,16 @@ ACTIVE_CHILD_STATUSES = {
     "publishing",
 }
 
+# Statuses that mean a child course job has finished (success or failure).
 TERMINAL_CHILD_STATUSES = {"completed", "failed"}
+# Valid course difficulty levels (100 = beginner, 400 = advanced).
 VALID_LEVELS = (100, 200, 300, 400)
+# How many LLM attempts are allowed to produce a valid subject lineup.
 MAX_SUBJECT_PLAN_ATTEMPTS = 4
 
 
 def _load_system_prompt() -> str:
+    """Load the subject-plan system prompt from the ``system_prompts/`` directory."""
     prompt_path = os.path.join(
         os.path.dirname(__file__),
         "..",
@@ -51,6 +95,7 @@ def _load_system_prompt() -> str:
 
 
 def _subject_plan_approval(runtime: dict[str, Any], job_data: dict[str, Any]) -> dict[str, Any]:
+    """Read the subject-plan approval config (runtime > job data)."""
     payload = runtime.get("subject_plan_approval")
     if isinstance(payload, dict):
         return dict(payload)
@@ -61,6 +106,7 @@ def _subject_plan_approval(runtime: dict[str, Any], job_data: dict[str, Any]) ->
 
 
 def _subject_plan(runtime: dict[str, Any], job_data: dict[str, Any]) -> dict[str, Any]:
+    """Read the subject lineup plan (runtime > job data)."""
     payload = runtime.get("subject_plan")
     if isinstance(payload, dict):
         return dict(payload)
@@ -71,6 +117,7 @@ def _subject_plan(runtime: dict[str, Any], job_data: dict[str, Any]) -> dict[str
 
 
 def _subject_counts(runtime: dict[str, Any], job_data: dict[str, Any]) -> dict[str, int]:
+    """Read the child-job status counters (pending/running/completed/failed)."""
     payload = runtime.get("child_counts")
     if isinstance(payload, dict):
         return {
@@ -91,6 +138,12 @@ def _subject_counts(runtime: dict[str, Any], job_data: dict[str, Any]) -> dict[s
 
 
 def _live_content_job(ctx: StepContext) -> dict[str, Any]:
+    """Fetch the latest version of the legacy content_job from Firestore.
+
+    The watch step reads the *live* document (not the snapshot cached in
+    ``ctx.job``) so it can detect admin actions (pause, resume) that
+    occurred after the job was claimed.
+    """
     content_job_id = _content_job_id(ctx.job)
     if not content_job_id:
         return {}
@@ -101,6 +154,7 @@ def _live_content_job(ctx: StepContext) -> dict[str, Any]:
 
 
 def _load_subject(ctx: StepContext, subject_id: str) -> dict[str, Any]:
+    """Load the subject metadata (label, description, etc.) from Firestore."""
     snap = ctx.db.collection("subjects").document(subject_id).get()
     if not snap.exists:
         raise ValueError(f"Subject '{subject_id}' not found")
@@ -109,6 +163,7 @@ def _load_subject(ctx: StepContext, subject_id: str) -> dict[str, Any]:
 
 
 def _level_counts(job_data: dict[str, Any]) -> dict[int, int]:
+    """Parse the per-level course counts from job params (e.g. l100=3, l200=2)."""
     params = job_data.get("params") or {}
     raw_counts = params.get("levelCounts") or {}
     counts = {
@@ -123,6 +178,7 @@ def _level_counts(job_data: dict[str, Any]) -> dict[int, int]:
 
 
 def _extract_json_object(text: str) -> str:
+    """Extract the first balanced ``{...}`` block from arbitrary LLM output."""
     start = text.find("{")
     if start == -1:
         raise ValueError("No JSON object start found")
@@ -139,6 +195,7 @@ def _extract_json_object(text: str) -> str:
 
 
 def _clean_json_text(text: str) -> str:
+    """Normalize smart quotes and trailing commas for ``json.loads``."""
     cleaned = text
     cleaned = cleaned.replace("“", '"').replace("”", '"')
     cleaned = cleaned.replace("‘", "'").replace("’", "'")
@@ -147,6 +204,7 @@ def _clean_json_text(text: str) -> str:
 
 
 def _parse_json_payload(raw: str) -> dict[str, Any]:
+    """Parse LLM output with the same three-tier fallback as ``_parse_plan``."""
     text = raw.strip()
     if text.startswith("```"):
         first_newline = text.index("\n")
@@ -172,6 +230,7 @@ def _parse_json_payload(raw: str) -> dict[str, Any]:
 
 
 def _build_subject_plan_prompt(job_data: dict[str, Any], subject: dict[str, Any], counts: dict[int, int]) -> str:
+    """Build the initial LLM prompt for generating the full subject course lineup."""
     params = job_data.get("params") or {}
     custom_instructions = str(params.get("customInstructions") or "").strip()
     custom_block = f"Additional instructions: {custom_instructions}\n" if custom_instructions else ""
@@ -204,6 +263,8 @@ def _build_subject_plan_repair_prompt(
     missing_counts: dict[int, int],
     last_error: str,
 ) -> str:
+    """Build a repair prompt that tells the LLM which courses are already accepted
+    and exactly how many more are needed at each level."""
     params = job_data.get("params") or {}
     custom_instructions = str(params.get("customInstructions") or "").strip()
     custom_block = f"Additional instructions: {custom_instructions}\n" if custom_instructions else ""
@@ -247,6 +308,7 @@ Every course must belong to one of the missing levels above.
 
 
 def _coerce_level(value: Any) -> int:
+    """Convert a level value (int, string like ``"200"``, or ``"Level 200"``) to an int."""
     if isinstance(value, int):
         return value
     text = str(value or "").strip()
@@ -257,6 +319,11 @@ def _coerce_level(value: Any) -> int:
 
 
 def _extract_course_candidates(raw_courses: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Validate and normalize raw course entries from LLM output.
+
+    Filters out entries with missing fields or invalid levels, and caps
+    learning goals and prerequisites at 3 items each.
+    """
     candidates: list[dict[str, Any]] = []
     for raw_course in raw_courses:
         if not isinstance(raw_course, dict):
@@ -296,6 +363,11 @@ def _append_unique_courses(
     candidates: list[dict[str, Any]],
     required_counts: dict[int, int],
 ) -> None:
+    """Add courses to the accepted pool, deduplicating by title (case-insensitive).
+
+    Stops adding to a level once it reaches its required count.  This is used
+    both on the initial generation pass and on repair passes.
+    """
     seen_titles = {
         str(course.get("title") or "").strip().casefold()
         for level in VALID_LEVELS
@@ -316,6 +388,7 @@ def _missing_level_counts(
     accepted_by_level: dict[int, list[dict[str, Any]]],
     required_counts: dict[int, int],
 ) -> dict[int, int]:
+    """Calculate how many more courses are needed at each level."""
     return {
         level: max(0, required_counts[level] - len(accepted_by_level[level]))
         for level in VALID_LEVELS
@@ -335,6 +408,7 @@ def _flatten_subject_courses(
     accepted_by_level: dict[int, list[dict[str, Any]]],
     required_counts: dict[int, int],
 ) -> list[dict[str, Any]]:
+    """Flatten the per-level accepted courses into a single ordered list."""
     normalized: list[dict[str, Any]] = []
     for level in VALID_LEVELS:
         candidates = accepted_by_level[level]
@@ -346,6 +420,7 @@ def _flatten_subject_courses(
 
 
 def _normalize_courses(raw_courses: list[dict[str, Any]], required_counts: dict[int, int]) -> list[dict[str, Any]]:
+    """Validate, deduplicate, and group raw LLM courses by level."""
     grouped: dict[int, list[dict[str, Any]]] = {level: [] for level in VALID_LEVELS}
     _append_unique_courses(grouped, _extract_course_candidates(raw_courses), required_counts)
     normalized: list[dict[str, Any]] = []
@@ -365,6 +440,7 @@ def _normalize_courses(raw_courses: list[dict[str, Any]], required_counts: dict[
 
 
 def _course_code_exists(db, code: str) -> bool:
+    """Check if a course code is already in use (published or in-progress)."""
     code = str(code or "").strip().upper()
     if not code:
         return False
@@ -387,6 +463,7 @@ def _course_code_exists(db, code: str) -> bool:
 
 
 def _code_prefix(job_data: dict[str, Any]) -> str:
+    """Derive the course-code prefix from the subject label (e.g. ``"CBT"``)."""
     params = job_data.get("params") or {}
     label = str(params.get("subjectLabel") or params.get("subjectId") or "COURSE").strip().upper()
     prefix = re.sub(r"[^A-Z0-9]", "", label)
@@ -394,6 +471,7 @@ def _code_prefix(job_data: dict[str, Any]) -> str:
 
 
 def _level_number_candidates(level: int) -> list[int]:
+    """Generate candidate course numbers for a level (e.g. 101, 110, 120, ..., 102, 103, ...)."""
     preferred_suffixes = [1] + [offset for offset in range(10, 100, 10)]
     remaining_suffixes = [
         offset
@@ -404,6 +482,11 @@ def _level_number_candidates(level: int) -> list[int]:
 
 
 def _assign_codes(db, job_data: dict[str, Any], courses: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Assign unique course codes (e.g. ``CBT101``, ``CBT201``) to each course.
+
+    Codes are checked against both the ``courses`` and ``content_jobs``
+    collections to avoid collisions with existing or in-progress courses.
+    """
     prefix = _code_prefix(job_data)
     number_candidates = {
         100: _level_number_candidates(100),
@@ -447,13 +530,24 @@ def _assign_codes(db, job_data: dict[str, Any], courses: list[dict[str, Any]]) -
 
 
 def _build_subject_plan(ctx: StepContext, job_data: dict[str, Any]) -> dict[str, Any]:
-    """Generate a validated subject lineup, retrying with repair prompts if needed."""
+    """Generate a validated subject lineup, retrying with repair prompts if needed.
+
+    Self-healing loop:
+        1. Send the initial prompt asking for all courses at all levels.
+        2. Validate the response: extract valid courses, deduplicate, and
+           check per-level counts.
+        3. If any levels are still short, send a *repair* prompt that lists
+           already-accepted courses and the exact missing counts.
+        4. Repeat up to ``MAX_SUBJECT_PLAN_ATTEMPTS`` times.
+        5. After the loop, assign unique course codes and return the plan.
+    """
     from factory_v2.shared.llm_generator import _get_llm_adapter
 
     counts = _level_counts(job_data)
     subject_id = str((job_data.get("params") or {}).get("subjectId") or "").strip()
     subject = _load_subject(ctx, subject_id)
     adapter = _get_llm_adapter(job_data)
+    # Accumulator: courses accepted so far, grouped by level.
     accepted_by_level: dict[int, list[dict[str, Any]]] = {level: [] for level in VALID_LEVELS}
     overview = ""
     last_error = ""
@@ -518,6 +612,7 @@ def _build_subject_plan(ctx: StepContext, job_data: dict[str, Any]) -> dict[str,
 
 
 def _max_active_children(runtime: dict[str, Any], job_data: dict[str, Any]) -> int:
+    """Read the concurrency limit for child course jobs (default: 2)."""
     raw = runtime.get("max_active_child_courses")
     if raw is None:
         raw = job_data.get("maxActiveChildCourses")
@@ -526,6 +621,7 @@ def _max_active_children(runtime: dict[str, Any], job_data: dict[str, Any]) -> i
 
 
 def _launch_cursor(runtime: dict[str, Any], job_data: dict[str, Any]) -> int:
+    """Read the launch cursor -- index of the next course to launch."""
     raw = runtime.get("launch_cursor")
     if raw is None:
         raw = job_data.get("launchCursor")
@@ -538,12 +634,14 @@ def _launch_scan_cursor(plan: dict[str, Any], runtime: dict[str, Any], job_data:
 
 
 def _child_jobs(ctx: StepContext) -> list[dict[str, Any]]:
+    """Fetch all child content_jobs that belong to this parent subject job."""
     parent_job_id = _content_job_id(ctx.job)
     query = ctx.db.collection("content_jobs").where("parentJobId", "==", parent_job_id)
     return [{"id": snap.id, **(snap.to_dict() or {})} for snap in query.stream()]
 
 
 def _compute_child_counts(child_jobs: list[dict[str, Any]]) -> dict[str, int]:
+    """Bucket child jobs into pending/running/completed/failed counters."""
     counts = dict(DEFAULT_CHILD_COUNTS)
     for child_job in child_jobs:
         status = str(child_job.get("status") or "").strip().lower()
@@ -559,6 +657,12 @@ def _compute_child_counts(child_jobs: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def _sync_plan_children(plan: dict[str, Any], child_jobs: list[dict[str, Any]]) -> tuple[dict[str, Any], list[str]]:
+    """Reconcile the plan's course list with the actual child jobs in Firestore.
+
+    Each course entry in the plan is updated with the matching child job's
+    ID, status, and error (if any).  Returns the updated plan and the list
+    of child job IDs for storage.
+    """
     children_by_course_code = {}
     for child_job in child_jobs:
         course_code = str(((child_job.get("params") or {}).get("courseCode") or "")).strip()
@@ -589,6 +693,11 @@ def _sync_plan_children(plan: dict[str, Any], child_jobs: list[dict[str, Any]]) 
 
 
 def _make_child_course_job(ctx: StepContext, job_data: dict[str, Any], course: dict[str, Any]) -> str:
+    """Create a new ``content_jobs`` document for one child course and return its ID.
+
+    The child inherits LLM/TTS config from the parent but gets its own
+    course code, title, and description from the generated plan.
+    """
     params = job_data.get("params") or {}
     subject_label = str(params.get("subjectLabel") or params.get("subjectId") or "").strip()
     topic = str(course.get("description") or "").strip()
@@ -634,6 +743,7 @@ def _make_child_course_job(ctx: StepContext, job_data: dict[str, Any], course: d
 
 
 def _subject_progress_text(plan: dict[str, Any], counts: dict[str, int], launch_cursor: int, *, paused: bool = False) -> str:
+    """Build a human-readable progress string for the admin UI."""
     total = len(list(plan.get("courses") or []))
     if paused:
         return f"Paused after launching {launch_cursor}/{total} child courses"
@@ -649,10 +759,22 @@ def _subject_progress_text(plan: dict[str, Any], counts: dict[str, int], launch_
 
 
 def execute_generate_subject_plan(ctx: StepContext) -> StepResult:
-    """Generate the subject lineup and optionally stop for approval before launching children."""
+    """Generate the subject lineup and optionally stop for approval before launching children.
+
+    If the plan already exists in runtime (from a prior run), it is reused.
+    Otherwise, ``_build_subject_plan`` is called to generate a fresh lineup
+    using the self-healing LLM loop.
+
+    Approval Flow:
+        When ``subjectPlanApproval.enabled`` is true and no approval has been
+        recorded, the step pauses with ``awaiting_subject_plan_approval`` so
+        an admin can review the proposed courses before any child jobs are
+        created.
+    """
     job_data = _content_job_data(ctx.job)
     runtime = _runtime(ctx.job)
 
+    # Idempotency: reuse an existing plan if available.
     plan = _subject_plan(runtime, job_data)
     if not plan:
         plan = _build_subject_plan(ctx, job_data)
@@ -727,19 +849,32 @@ def execute_generate_subject_plan(ctx: StepContext) -> StepResult:
 
 
 def execute_launch_subject_children(ctx: StepContext) -> StepResult:
-    """Launch as many child course jobs as the configured concurrency window allows."""
+    """Launch as many child course jobs as the configured concurrency window allows.
+
+    Bounded concurrency:
+        The number of simultaneously active child jobs is capped at
+        ``max_active_children`` (default 2).  This step fills any available
+        slots by creating new ``content_jobs`` documents in Firestore.
+        Each child document triggers the standard course pipeline.
+
+    The ``launch_cursor`` tracks which course in the plan to launch next,
+    making the step safe to retry without re-launching earlier courses.
+    """
     job_data = _content_job_data(ctx.job)
     runtime = _runtime(ctx.job)
     plan = _subject_plan(runtime, job_data)
     if not plan:
         raise ValueError("Missing runtime.subject_plan")
 
+    # Sync plan with actual Firestore child jobs (some may have been created
+    # by a prior run of this step).
     existing_children = _child_jobs(ctx)
     plan, child_job_ids = _sync_plan_children(plan, existing_children)
     launch_cursor = _launch_scan_cursor(plan, runtime, job_data)
     max_active = _max_active_children(runtime, job_data)
     child_counts = _compute_child_counts(existing_children)
 
+    # Calculate how many new child jobs we can launch.
     active_children = child_counts["pending"] + child_counts["running"]
     available_slots = max(0, max_active - active_children)
     next_courses = list(plan.get("courses") or [])
@@ -796,9 +931,21 @@ def execute_launch_subject_children(ctx: StepContext) -> StepResult:
 
 
 def execute_watch_subject_children(ctx: StepContext) -> StepResult:
-    """Poll child jobs, top up any newly free launch slots, and decide whether to requeue."""
+    """Poll child jobs, top up any newly free launch slots, and decide whether to requeue.
+
+    State machine:
+        * **watching** -- children still running; requeue in 15 seconds.
+        * **paused** -- admin requested a pause; stop launching new children.
+        * **failed** -- all children terminal but some failed.
+        * **completed** -- all children completed successfully.
+
+    This step also acts as a secondary launcher: when a child finishes and
+    frees a slot, the watch step launches the next course from the plan
+    (same bounded-concurrency logic as ``launch_subject_children``).
+    """
     job_data = _content_job_data(ctx.job)
     runtime = _runtime(ctx.job)
+    # Read the *live* content_job to detect admin pause/resume requests.
     live_job = _live_content_job(ctx)
     plan = _subject_plan(runtime, live_job or job_data)
     if not plan:
@@ -954,5 +1101,7 @@ def execute_watch_subject_children(ctx: StepContext) -> StepResult:
             "subjectProgress": progress,
             "jobRunId": ctx.run_id,
         },
+        # Self-requeue: the claim loop will schedule another poll in 15 seconds
+        # so the subject job keeps monitoring child progress.
         requeue_after_seconds=15,
     )

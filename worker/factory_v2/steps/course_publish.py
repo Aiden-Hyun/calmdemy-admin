@@ -1,4 +1,29 @@
-"""Course publish steps: fan-in confirmation first, then writes to app collections."""
+"""Course publish steps: fan-in confirmation first, then writes to app collections.
+
+Architectural Role:
+    Pipeline Step -- implements the final two steps of the course pipeline:
+    (1) ``upload_course_audio`` -- a lightweight confirmation gate that
+    verifies all session audio is ready, and (2) ``publish_course`` -- the
+    step that writes the course and its sessions to the app-facing Firestore
+    collections (``courses``, ``course_sessions``).
+
+Design Patterns:
+    * **Approval Checkpoint** -- ``publish_course`` can pause at an approval
+      gate (e.g. regeneration review) before writing to production.
+    * **Idempotent Publish** -- if the course already exists in Firestore
+      and no regeneration/manual-publish is requested, the step returns
+      the existing IDs without re-writing.
+    * **Storage Cleanup** -- when regeneration replaces session audio, the
+      old Cloud Storage paths are deleted after publish succeeds.
+
+Key Dependencies:
+    * ``factory_v2.shared.voice_utils`` -- TTS voice display names
+    * ``factory_v2.shared.storage_cleanup`` -- orphaned audio deletion
+    * ``course_common`` -- ``SESSION_DEFS``, helpers, preview builder
+
+Consumed By:
+    * ``course.py`` (re-export facade) -> ``registry.py``
+"""
 
 from __future__ import annotations
 
@@ -28,7 +53,23 @@ def _publish_course(
     audio_results: dict[str, dict[str, Any]],
     job_data: dict,
 ) -> tuple[str, list[str]]:
-    """Write/update the course doc plus all of its session docs in Firestore."""
+    """Write/update the course doc plus all of its session docs in Firestore.
+
+    Uses ``merge=True`` so that re-publishes (regeneration, thumbnail refresh)
+    only overwrite the fields that changed, preserving user-facing metadata
+    like ``isFree`` or custom descriptions set by admins.
+
+    Args:
+        db: Firestore client instance.
+        publish_token: Document ID for the ``courses`` collection.  Reused
+            across regeneration so the same course ID is updated in place.
+        plan: The LLM-generated course plan (modules, titles, etc.).
+        audio_results: Mapping of session code -> ``{storagePath, durationSec}``.
+        job_data: Original content-job payload with params and metadata.
+
+    Returns:
+        Tuple of ``(course_id, session_ids)`` -- the Firestore document IDs.
+    """
     params = job_data.get("params", {})
     course_code = params.get("courseCode", "COURSE101")
     course_title = params.get("courseTitle", plan.get("courseTitle", "Untitled"))
@@ -101,7 +142,12 @@ def _publish_course(
 
 
 def execute_upload_course_audio(ctx: StepContext) -> StepResult:
-    """Project that all course audio uploads are now ready for the publish step."""
+    """Confirm that all course audio uploads are ready for the publish step.
+
+    This is a lightweight gate step -- it does not perform any actual uploads.
+    It simply verifies that ``course_audio_results`` exists in runtime (populated
+    by the synthesis steps) and advances the pipeline toward publish.
+    """
     job_data = _content_job_data(ctx.job)
     runtime = _runtime(ctx.job)
 
@@ -124,7 +170,17 @@ def execute_upload_course_audio(ctx: StepContext) -> StepResult:
 
 
 def execute_publish_course(ctx: StepContext) -> StepResult:
-    """Publish the course or stop at an approval checkpoint when required."""
+    """Publish the course or stop at an approval checkpoint when required.
+
+    Decision matrix for ``should_publish``:
+        * ``autoPublish=True`` (default) -> publish immediately.
+        * ``status="publishing"`` (admin-triggered) -> publish immediately.
+        * Regeneration active + ``requiresPublishApproval`` -> pause.
+        * ``autoPublish=False`` and not manually publishing -> pause.
+
+    When paused, a preview payload is written so the admin can review
+    session titles, audio paths, and durations before approving.
+    """
     job_data = _content_job_data(ctx.job)
     runtime = _runtime(ctx.job)
 
@@ -139,6 +195,7 @@ def execute_publish_course(ctx: StepContext) -> StepResult:
     if not audio_results:
         raise ValueError("Missing runtime.course_audio_results")
 
+    # --- Determine whether to publish or pause for approval ---
     request_status = str(job_data.get("status") or "").strip().lower()
     auto_publish = bool(job_data.get("autoPublish", True))
     manual_publish = request_status == "publishing"
@@ -149,6 +206,7 @@ def execute_publish_course(ctx: StepContext) -> StepResult:
     regeneration_active = bool(regeneration.get("active"))
     requires_publish_approval = bool(regeneration.get("requiresPublishApproval"))
     should_publish = auto_publish or manual_publish
+    # Regeneration can override auto-publish when admin review is required.
     if regeneration_active and requires_publish_approval and not manual_publish:
         should_publish = False
 
@@ -173,6 +231,9 @@ def execute_publish_course(ctx: StepContext) -> StepResult:
             },
         )
 
+    # Resolve the Firestore document ID for the course.  Regeneration and
+    # manual-publish reuse the existing course ID so the document is updated
+    # in place rather than duplicated.
     publish_token = str(job_data.get("publishToken") or job_data.get("id") or ctx.job.get("id") or course_code)
 
     existing_course_id = runtime.get("course_id") or job_data.get("courseId")
@@ -180,6 +241,8 @@ def execute_publish_course(ctx: StepContext) -> StepResult:
     if existing_course_id and (regeneration_active or manual_publish or thumbnail_generation_requested):
         publish_token = str(existing_course_id)
 
+    # Idempotency: skip publish if the course already exists and nothing
+    # requested a replacement (no regeneration, no manual trigger).
     if (
         existing_course_id
         and existing_session_ids
@@ -201,6 +264,8 @@ def execute_publish_course(ctx: StepContext) -> StepResult:
             },
         )
 
+    # Collect old audio paths that regeneration is replacing so they can be
+    # cleaned up from Cloud Storage after the new publish succeeds.
     replaced_old_paths: list[str] = []
     if regeneration_active:
         previous_audio_by_session = regeneration.get("previousAudioBySession") or {}
@@ -226,6 +291,8 @@ def execute_publish_course(ctx: StepContext) -> StepResult:
         },
     )
 
+    # Clean up replaced audio files from Cloud Storage.  The allowed_prefixes
+    # guard prevents accidental deletion of non-audio assets.
     if replaced_old_paths:
         from factory_v2.shared.storage_cleanup import delete_storage_paths
 

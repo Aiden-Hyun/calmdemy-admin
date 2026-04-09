@@ -1,4 +1,35 @@
-"""Dispatcher that upgrades legacy `content_jobs` rows into V2 runs."""
+"""Dispatcher that upgrades legacy ``content_jobs`` rows into V2 runs.
+
+Architectural Role:
+    The dispatcher is a **driving adapter** that bridges the old system
+    into the new one.  Legacy ``content_jobs`` documents (created by the
+    admin UI) have a flat document shape.  The dispatcher scans for
+    eligible documents, transactionally locks one, and delegates to
+    ``bootstrap_from_content_job`` which creates the V2 job/run/queue
+    structure.
+
+Design Patterns:
+    * **Claim-or-Skip** -- A Firestore transaction sets ``v2Locked``
+      atomically so that exactly one dispatcher (across all workers)
+      processes a given job.  This avoids both duplicate work and
+      external locking infrastructure.
+    * **Stale Lock Recovery** -- If a dispatcher crashes after locking
+      but before completing the bootstrap, the lock times out after
+      ``_DISPATCH_LOCK_TIMEOUT_SECONDS`` and another worker can reclaim.
+    * **Fail-Fast Validation** -- Worker capability checks happen inside
+      the transaction so jobs that can never succeed are immediately
+      marked ``failed`` with a clear admin-visible error.
+
+Key Dependencies:
+    * ``bootstrap_from_content_job`` (bootstrap.py) -- converts the
+      legacy document into V2 state and starts the first run.
+    * ``load_stack_config`` / ``any_enabled_stack_supports_tts_model``
+      -- reads the cluster's capability matrix to pre-validate jobs.
+
+Consumed By:
+    * ``WorkerMain.run_forever`` calls ``dispatch_next_content_job``
+      once per tick when the worker has dispatch capability.
+"""
 
 from __future__ import annotations
 
@@ -18,7 +49,12 @@ from .bootstrap import bootstrap_from_content_job
 
 logger = get_logger(__name__)
 
+# Only these legacy statuses are eligible for V2 dispatch.
+# "pending" = brand-new job, "publishing" = manual re-publish request.
 _DISPATCH_STATUSES = ("pending", "publishing")
+
+# How long a v2Locked flag can sit before another worker reclaims it.
+# Guards against dispatchers that crash mid-bootstrap.
 _DISPATCH_LOCK_TIMEOUT_SECONDS = max(
     15,
     int(os.getenv("V2_DISPATCH_LOCK_TIMEOUT_SECONDS", "60")),
@@ -26,6 +62,11 @@ _DISPATCH_LOCK_TIMEOUT_SECONDS = max(
 
 
 def _coerce_datetime(value) -> datetime | None:
+    """Normalise Firestore timestamp variants into a stdlib ``datetime``.
+
+    Firestore can return native ``datetime``, proto ``DatetimeWithNanoseconds``,
+    or JavaScript-style wrapper objects depending on the SDK version.
+    """
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -38,11 +79,18 @@ def _coerce_datetime(value) -> datetime | None:
 
 
 def _is_stale_dispatch_lock(data: dict) -> bool:
+    """Return True when a ``v2Locked`` flag has exceeded its timeout.
+
+    This is the self-healing mechanism for the dispatch lock: if a worker
+    dies after setting ``v2Locked`` but before finishing the bootstrap,
+    another worker will eventually see the lock as stale and reclaim it.
+    """
     if not data.get("v2Locked"):
         return False
 
     dispatched_at = _coerce_datetime(data.get("v2DispatchedAt"))
     if dispatched_at is None:
+        # Lock exists but no timestamp -- definitely stale.
         return True
     if dispatched_at.tzinfo is None:
         dispatched_at = dispatched_at.replace(tzinfo=timezone.utc)
@@ -52,10 +100,16 @@ def _is_stale_dispatch_lock(data: dict) -> bool:
 
 
 def _is_cloud_job(data: dict) -> bool:
+    """Cloud-backend jobs are not supported by V2 -- reject early."""
     return data.get("llmBackend") == "cloud" or data.get("ttsBackend") == "cloud"
 
 
 def _has_active_v2_run(transaction, db, data: dict) -> bool:
+    """Check whether a V2 run is already in progress for this job.
+
+    This prevents dispatching a second run when one is already executing,
+    which would cause conflicting state updates.
+    """
     run_id = str(data.get("v2RunId") or "").strip()
     if not run_id:
         return False
@@ -74,7 +128,18 @@ def _claim_for_v2(
     worker_id: str,
     stack_defs: list[dict],
 ) -> Optional[tuple[dict, bool]]:
-    """Atomically lock one eligible legacy job so exactly one dispatcher boots it."""
+    """Atomically lock one eligible legacy job so exactly one dispatcher boots it.
+
+    The Firestore transaction reads the current document state, applies a
+    series of eligibility guards, and -- only if everything passes -- sets
+    ``v2Locked = True``.  This is an optimistic-concurrency pattern:
+    if two workers race, only the first writer wins; the second sees the
+    lock and bails out.
+
+    Returns:
+        ``(job_data, recovered_stale_lock)`` on success, or ``None`` if
+        the job was ineligible or already claimed.
+    """
     tx = db.transaction()
 
     @firestore.transactional
@@ -84,6 +149,7 @@ def _claim_for_v2(
             return None
 
         data = snap.to_dict() or {}
+        # --- Eligibility guards (evaluated inside the transaction) ---
         if data.get("status") not in _DISPATCH_STATUSES:
             return None
         if data.get("deleteRequested"):
@@ -149,10 +215,12 @@ def _claim_for_v2(
                 return None
         if _has_active_v2_run(transaction, db, data):
             return None
+        # Allow reclaiming a lock only when it has exceeded its timeout.
         recovered_stale_lock = _is_stale_dispatch_lock(data)
         if data.get("v2Locked") and not recovered_stale_lock:
             return None
 
+        # --- All guards passed -- acquire the dispatch lock ---
         transaction.update(
             doc_ref,
             {
@@ -170,8 +238,20 @@ def _claim_for_v2(
 
 
 def dispatch_next_content_job(db, worker_id: str) -> Optional[tuple[str, str]]:
-    """Claim one eligible content job and bootstrap a V2 run."""
+    """Claim one eligible content job and bootstrap a V2 run.
+
+    Iterates over each dispatch-eligible status (``pending`` first, then
+    ``publishing``), scans up to 25 candidate docs per status ordered by
+    creation time, and attempts to claim each via ``_claim_for_v2``.
+    The first successful claim triggers the bootstrap and returns.
+
+    Returns:
+        ``(content_job_id, run_id)`` on success, or ``None`` if no
+        eligible job was found.
+    """
     jobs = db.collection("content_jobs")
+    # Load the current stack capability matrix so we can fail-fast inside
+    # the transaction when no worker can handle the requested TTS model.
     stack_defs = load_stack_config()
 
     for status in _DISPATCH_STATUSES:

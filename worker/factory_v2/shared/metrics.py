@@ -1,4 +1,27 @@
-"""Daily aggregate metric writers for completed or failed factory jobs."""
+"""Daily aggregate metric writers for completed or failed factory jobs.
+
+Architectural Role:
+    After each job finishes (success or failure), this module increments
+    counters in a per-day ``factory_metrics`` Firestore document.  The
+    admin dashboard reads these documents to render throughput charts,
+    failure-rate graphs, and latency histograms.
+
+    Metrics are bucketed by UTC date (``YYYY-MM-DD``).  Each document
+    accumulates:
+        - ``completed_total`` / ``failed_total`` -- raw counts
+        - ``completed_by_type.*`` / ``failed_by_type.*`` -- per content type
+        - ``failed_by_stage.*`` -- which pipeline step failed
+        - ``duration_sec_sum`` / ``duration_sec_count`` -- for average latency
+        - ``queue_latency_sec_sum`` / ``queue_latency_sec_count``
+        - Timing breakdown fields when ``timingStatus == "exact"``
+
+Key Dependencies:
+    - firebase_admin.firestore  -- Firestore SDK (atomic ``Increment``)
+
+Consumed By:
+    - factory_v2 job completion / failure handlers
+    - Admin metrics dashboard
+"""
 
 from __future__ import annotations
 
@@ -13,6 +36,12 @@ logger = get_logger(__name__)
 
 
 def _coerce_datetime(value: Any) -> datetime | None:
+    """Convert a Firestore timestamp (or Python datetime) to a datetime.
+
+    Firestore can return timestamps as native ``datetime`` objects or as
+    proprietary ``DatetimeWithNanoseconds`` objects.  This helper handles
+    both, plus the older ``toDate()`` path used by some SDK versions.
+    """
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -32,7 +61,21 @@ def record_job_metric(
     stage: str | None = None,
     error: str | None = None,
 ) -> None:
-    """Increment the per-day metrics document for one finished job outcome."""
+    """Increment the per-day metrics document for one finished job outcome.
+
+    Uses Firestore's atomic ``Increment`` transform so that concurrent
+    workers updating the same day's document do not lose writes.
+
+    Two timing paths are supported:
+        1. **Exact** (``timingStatus == "exact"``): uses pre-computed timing
+           fields from the lineage system (effective elapsed, worker time,
+           reuse credits, wasted time, queue latency).
+        2. **Approximate** (fallback): derives timing from ``createdAt``,
+           ``startedAt``, and ``completedAt`` timestamps.
+
+    The entire function is wrapped in a try/except so that a metrics
+    write failure never blocks the main pipeline.
+    """
     try:
         content_type = job_data.get("contentType", "unknown")
         date_key = datetime.now(timezone.utc).date().isoformat()

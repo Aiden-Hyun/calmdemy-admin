@@ -1,4 +1,22 @@
-"""Worker-status writers used by admin screens, watchdogs, and recovery code."""
+"""Worker heartbeat and status writers.
+
+Architectural Role:
+    Each worker process periodically writes its status to the
+    ``worker_status`` Firestore collection.  The admin dashboard reads
+    these documents to show which workers are alive, what step they are
+    currently executing, and when they last checked in.  The recovery
+    watchdog also uses the ``lastHeartbeat`` field to detect stale workers
+    and reassign their queue items.
+
+Key Dependencies:
+    - firebase_admin.firestore  -- Firestore SDK
+    - config.POLL_INTERVAL_SECONDS -- default heartbeat cadence
+
+Consumed By:
+    - factory_v2 worker loop (heartbeat on every poll iteration)
+    - Admin dashboard (real-time worker monitoring)
+    - Recovery watchdog (dead-worker detection)
+"""
 
 from typing import Any
 
@@ -7,6 +25,9 @@ from firebase_admin import firestore as fs
 import config
 
 
+# Fields that describe the step a worker is currently executing.
+# When ``clear_current_step=True`` these are all set to ``None`` to signal
+# the worker is idle and polling for new work.
 _ACTIVE_STEP_FIELDS = (
     "jobId",
     "currentQueueId",
@@ -37,7 +58,20 @@ def update_worker_status(
     clear_current_step: bool = False,
     extra_patch: dict[str, Any] | None = None,
 ) -> None:
-    """Write the worker heartbeat plus optional active-step details in one document."""
+    """Write the worker heartbeat plus optional active-step details in one document.
+
+    Called on every poll iteration so the admin dashboard and recovery
+    watchdog can see that the worker is alive and what it is doing.
+
+    Args:
+        db: Firestore client.
+        worker_id: Unique identifier for this worker process.
+        worker_type: E.g. ``"tts"``, ``"llm"``, ``"general"``.
+        current_step: Dict of active-step fields to merge into the doc.
+        clear_current_step: If True, null out all active-step fields
+            (worker is idle / between jobs).
+        extra_patch: Arbitrary extra fields to merge (e.g. version info).
+    """
     payload: dict[str, Any] = {
         "workerId": worker_id,
         "workerType": worker_type,

@@ -1,5 +1,25 @@
-"""
-Step 5: Upload files to Firebase Storage.
+"""Step 5 -- Upload files to Firebase Storage.
+
+Architectural Role:
+    Transfers locally-produced audio (MP3) and image (JPEG) files to
+    Firebase Cloud Storage and returns the storage path / download URL.
+
+    Storage paths follow a convention shared with the React Native app
+    (see ``audioFiles.ts``) so that the client can resolve content to
+    the correct CDN location.  Each blob carries factory-specific
+    metadata (content job ID, step name, duration) for traceability.
+
+    Idempotency: if a blob already exists at the target path, the upload
+    is skipped and the existing blob's metadata is reused.  This makes
+    the step safe to retry after partial failures.
+
+Key Dependencies:
+    - firebase_admin.storage   -- Firebase Cloud Storage SDK
+    - mutagen                  -- MP3 metadata reader (for duration)
+    - config.STORAGE_BUCKET    -- target GCS bucket name
+
+Consumed By:
+    - factory_v2 pipeline steps ``upload_audio`` / ``upload_image``
 """
 
 import os
@@ -14,7 +34,10 @@ from observability import get_logger
 
 logger = get_logger(__name__)
 
-# Storage path conventions (must match the app's audioFiles.ts)
+# ---------------------------------------------------------------------------
+# Storage path conventions -- must stay in sync with the app's audioFiles.ts
+# so the client resolves the correct download URLs.
+# ---------------------------------------------------------------------------
 STORAGE_PATHS = {
     "guided_meditation": "audio/meditate/meditations",
     "sleep_meditation": "audio/sleep/meditations",
@@ -41,18 +64,22 @@ IMAGE_STORAGE_PATHS = {
 
 
 def _get_audio_duration(mp3_path: str) -> float:
-    """Get audio duration in seconds from an MP3 file."""
+    """Get audio duration in seconds from an MP3 file.
+
+    Falls back to a bitrate-based estimate if mutagen cannot read the file.
+    At 192 kbps the data rate is 24 KB/s, so ``file_size / 24000`` gives
+    a reasonable approximation.
+    """
     try:
         audio = MP3(mp3_path)
         return audio.info.length
     except Exception:
-        # Fallback: estimate from file size (192kbps = 24 KB/s)
         size = os.path.getsize(mp3_path)
         return size / 24000
 
 
 def _slugify(text: str) -> str:
-    """Convert text to a URL-safe slug."""
+    """Convert text to a URL-safe, lowercase slug (max 60 chars)."""
     import re
     slug = text.lower().strip()
     slug = re.sub(r'[^a-z0-9\s-]', '', slug)
@@ -62,6 +89,7 @@ def _slugify(text: str) -> str:
 
 
 def _stable_identifier(text: str, fallback: str) -> str:
+    """Return a slugified identifier, trying *text* first then *fallback*."""
     slug = _slugify(text)
     if slug:
         return slug
@@ -70,6 +98,13 @@ def _stable_identifier(text: str, fallback: str) -> str:
 
 
 def _asset_stem(job_data: dict, *, default_label: str) -> str:
+    """Derive a stable, human-readable filename stem for a storage object.
+
+    Priority:
+        1. Explicit ``_factoryAssetKey`` (set by the orchestrator).
+        2. ``<content_job_id>-<step_name>`` composite key.
+        3. ``<topic>-<random_hex>`` fallback for ad-hoc jobs.
+    """
     explicit = str(job_data.get("_factoryAssetKey") or "").strip()
     if explicit:
         return _stable_identifier(explicit, default_label)
@@ -85,6 +120,11 @@ def _asset_stem(job_data: dict, *, default_label: str) -> str:
 
 
 def _build_download_url(storage_path: str, token: str) -> str:
+    """Build a Firebase Storage download URL with an embedded access token.
+
+    Firebase Storage serves files via a REST-style URL where the object path
+    is URL-encoded and the download token authorizes public read access.
+    """
     encoded_path = urllib.parse.quote(storage_path, safe="")
     return (
         f"https://firebasestorage.googleapis.com/v0/b/{config.STORAGE_BUCKET}"
@@ -93,8 +133,16 @@ def _build_download_url(storage_path: str, token: str) -> str:
 
 
 def _ensure_download_token(blob) -> str:
+    """Return (or create) a Firebase download token on the blob.
+
+    Firebase Storage uses a custom metadata key
+    ``firebaseStorageDownloadTokens`` to authorize public downloads.
+    If the blob already has one we reuse it; otherwise we generate a
+    fresh UUID token and patch the blob metadata.
+    """
     blob.reload()
     metadata = dict(blob.metadata or {})
+    # Token field can contain comma-separated values; take the first
     token = str(metadata.get("firebaseStorageDownloadTokens") or "").split(",")[0].strip()
     if token:
         return token
@@ -106,27 +154,35 @@ def _ensure_download_token(blob) -> str:
 
 
 def upload_audio(mp3_path: str, job_data: dict) -> tuple[str, float]:
-    """
-    Upload MP3 to Firebase Storage.
+    """Upload MP3 to Firebase Storage.
 
-    Returns (storage_path, duration_seconds).
+    Idempotent: if a blob already exists at the computed path, the upload
+    is skipped and the stored duration is read from blob metadata instead.
+
+    Args:
+        mp3_path: Local path to the encoded MP3 file.
+        job_data: Firestore job document.
+
+    Returns:
+        Tuple of ``(storage_path, duration_seconds)``.
     """
     content_type = job_data.get("contentType", "guided_meditation")
 
-    # Build storage path
+    # Build the canonical storage path from content type + asset stem
     base_path = STORAGE_PATHS.get(content_type, "audio/generated")
     filename = f"{_asset_stem(job_data, default_label='audio')}.mp3"
     storage_path = f"{base_path}/{filename}"
 
     logger.info("Uploading audio", extra={"storage_path": storage_path})
 
-    # Get duration before upload
+    # Measure duration *before* upload so we can store it as blob metadata
     duration_sec = _get_audio_duration(mp3_path) if os.path.isfile(mp3_path) else 0.0
 
-    # Upload to Firebase Storage
+    # Upload to Firebase Storage (skip if blob already exists -- idempotent)
     bucket = storage.bucket(config.STORAGE_BUCKET)
     blob = bucket.blob(storage_path)
     if blob.exists():
+        # Reuse existing blob and recover its stored duration
         blob.reload()
         metadata = dict(blob.metadata or {})
         try:
@@ -137,6 +193,7 @@ def upload_audio(mp3_path: str, job_data: dict) -> tuple[str, float]:
     else:
         if not os.path.isfile(mp3_path):
             raise FileNotFoundError(f"Missing audio file for upload: {mp3_path}")
+        # Attach traceability metadata so we can link blobs back to jobs
         blob.metadata = {
             **dict(blob.metadata or {}),
             "factoryContentJobId": str(job_data.get("_factoryContentJobId") or ""),
@@ -149,6 +206,7 @@ def upload_audio(mp3_path: str, job_data: dict) -> tuple[str, float]:
             retry=None,
             timeout=60,
         )
+        # Cache for 1 year -- audio content is immutable once published
         blob.cache_control = "public, max-age=31536000"
         blob.patch()
 
@@ -168,10 +226,19 @@ def upload_audio(mp3_path: str, job_data: dict) -> tuple[str, float]:
 
 
 def upload_image(image_path: str, job_data: dict) -> tuple[str, str]:
-    """
-    Upload image to Firebase Storage.
+    """Upload a JPEG thumbnail image to Firebase Storage.
 
-    Returns (storage_path, download_url).
+    Unlike audio, images carry a download token so the client can display
+    them without authentication.  Existing blobs are reused unless the
+    ``_factoryOverwriteExistingAsset`` flag is set (used when regenerating
+    thumbnails for existing content).
+
+    Args:
+        image_path: Local path to the JPEG file.
+        job_data: Firestore job document.
+
+    Returns:
+        Tuple of ``(storage_path, download_url)``.
     """
     content_type = job_data.get("contentType", "guided_meditation")
 

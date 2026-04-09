@@ -1,16 +1,38 @@
-"""
-Calmdemy Content Factory — Local Companion (modular).
+"""Entry point for the Calmdemy Companion process.
 
-Primary responsibilities:
-- Listen to Firestore control + job changes and start/stop local worker stacks.
-- Optional HTTP wake endpoint (off by default).
-- Keep worker control doc updated for the admin UI.
+Architectural Role:
+    The companion is a long-lived supervisor that manages *worker stacks*
+    (one or more ``local_worker`` processes).  It does **not** process
+    content jobs itself -- instead it watches Firestore for new jobs and
+    control-doc changes, then spawns / stops worker processes as needed.
+
+    On macOS the companion is launched by a launchd plist so it starts
+    automatically at login and restarts on crash.
+
+Lifecycle (see ``main()``):
+    1. Initialise Firebase and ensure a control document exists in
+       Firestore (the admin UI reads this to show worker status).
+    2. Optionally start a **Firestore job listener** that reacts in
+       near-real-time when new content jobs appear.
+    3. Optionally start an **HTTP wake server** that the admin UI can
+       POST to, triggering immediate worker spin-up.
+    4. Enter the **control loop** -- a polling loop that reconciles
+       desired vs. actual worker state every few seconds.
+
+Key Dependencies:
+    ``companion/`` sub-package (control_loop, listener, wake_server, dedupe),
+    ``observability``, ``firebase_admin``.
+
+Consumed By:
+    Invoked directly via ``python local_companion.py`` or the launchd plist.
+    Not imported by any other module.
 """
 
 import os
 import sys
 
 # Ensure local imports work even when launched outside this folder
+# (e.g. when launchd runs us with cwd = /).
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
@@ -39,6 +61,9 @@ except ImportError:
 configure_logging()
 logger = get_logger(__name__)
 
+# ---------------------------------------------------------------------------
+# Companion-specific settings (all tuneable via environment)
+# ---------------------------------------------------------------------------
 POLL_SECONDS = float(os.getenv("COMPANION_POLL_SECONDS", "2"))
 ENABLE_WAKE_SERVER = os.getenv("ENABLE_WAKE_SERVER", "false").lower() == "true"
 ENABLE_JOB_LISTENER = os.getenv("ENABLE_JOB_LISTENER", "true").lower() == "true"
@@ -50,6 +75,12 @@ LISTENER_DEBOUNCE_SEC = float(os.getenv("LISTENER_DEBOUNCE_SEC", "0.15"))
 
 
 def main() -> None:
+    """Run the companion supervisor until interrupted.
+
+    The function wires up all optional subsystems (job listener, wake
+    server) and then blocks in the control loop.  On KeyboardInterrupt
+    or termination, the ``finally`` block tears down listeners cleanly.
+    """
     logger.info("Calmdemy Content Factory — Local Companion (modular)")
     logger.info(
         "Flags",
@@ -61,14 +92,21 @@ def main() -> None:
         },
     )
 
+    # --- Step 1: Firebase init + control doc ---
     db = init_firebase()
     ensure_control_doc(db)
 
+    # WakeDeduper prevents duplicate worker spin-ups when multiple
+    # signals arrive within a short window (e.g. listener + wake HTTP
+    # hitting at the same time).
     deduper = WakeDeduper(WAKE_DEDUP_WINDOW_SEC)
 
+    # Closure that the listener and wake server call when they want
+    # to ensure at least one worker stack is running.
     def _ensure_running(force: bool):
         ensure_running_wrapper(db, force)
 
+    # --- Step 2: Firestore real-time listener (optional) ---
     listener = None
     if ENABLE_JOB_LISTENER:
         listener = start_job_listener(
@@ -79,6 +117,7 @@ def main() -> None:
             debounce_sec=LISTENER_DEBOUNCE_SEC,
         )
 
+    # --- Step 3: HTTP wake server (optional) ---
     wake_thread = None
     if ENABLE_WAKE_SERVER:
         wake_thread = start_wake_server(
@@ -89,9 +128,12 @@ def main() -> None:
             force_immediate_start=FORCE_IMMEDIATE_START,
         )
 
+    # --- Step 4: Blocking control loop ---
     try:
         run_control_loop(db, poll_seconds=POLL_SECONDS, force_immediate_start=FORCE_IMMEDIATE_START)
     finally:
+        # Clean shutdown: detach Firestore snapshot listener and join
+        # the wake-server thread so we don't leak resources.
         if listener:
             listener.unsubscribe()
         if wake_thread:

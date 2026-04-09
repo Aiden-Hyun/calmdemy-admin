@@ -1,4 +1,54 @@
-"""Firestore-backed queue primitives used by workers and recovery routines."""
+"""Firestore-backed queue primitives used by workers and recovery routines.
+
+Architectural Role
+------------------
+Infrastructure Layer -- implements a durable work queue on top of a
+single Firestore collection (``factory_step_queue``).  This is a
+"poor-man's message queue" that trades throughput for simplicity: every
+queue item is a Firestore document whose ``state`` field drives a
+state machine.
+
+Design Patterns
+---------------
+* **Repository** -- all Firestore access for queue documents is
+  encapsulated here; callers never touch raw document references.
+* **Lease-based concurrency** -- instead of deleting items on claim,
+  workers *lease* them for a bounded duration.  If the worker crashes
+  the lease expires and recovery returns the item to ``ready``.
+* **Idempotent enqueue** -- deterministic document IDs
+  (``run__step__shard``) mean duplicate enqueues are harmless.
+* **Capability routing** -- each queue item carries a ``capability_key``
+  (e.g. ``tts:qwen3``, ``image``, ``default``) so heterogeneous workers
+  can poll only for work they can handle.
+
+Queue State Machine
+-------------------
+::
+
+    ready -> leased -> running -> succeeded
+                             \\-> failed
+                             \\-> ready  (retry / continuation)
+          \\-> failed (cancelled)
+
+* ``ready``     -- eligible for claim once ``available_at`` is in the past.
+* ``leased``    -- a worker has claimed it; ``lease_expires_at`` is set.
+* ``running``   -- executor work has actually started.
+* ``succeeded`` -- terminal success.
+* ``failed``    -- terminal failure (or cancelled).
+
+Key Dependencies
+----------------
+* ``firebase_admin.firestore`` -- transactions, server timestamps,
+  ``Increment`` sentinel, ``AlreadyExists``.
+* ``queue_capabilities`` -- translates step names into capability keys.
+
+Consumed By
+-----------
+* Worker poll loops (``fetch_ready_by_capability`` + ``claim_ready_doc``).
+* Step executors (``mark_running``, ``heartbeat_running``, ``mark_done``).
+* Orchestrator (``enqueue``, ``schedule_retry``, ``cancel_ready_for_run``).
+* Recovery cron (``recover_stale_leases``).
+"""
 
 from __future__ import annotations
 
@@ -13,16 +63,23 @@ from ..shared.queue_capabilities import capability_key_for_step
 
 
 class FirestoreQueueRepo:
-    """Low-level queue operations over the `factory_step_queue` collection."""
+    """Low-level queue operations over the ``factory_step_queue`` collection."""
 
     def __init__(self, db):
         self.db = db
 
     @staticmethod
     def make_queue_id(run_id: str, step_name: str, shard_key: str = "root") -> str:
+        """Build a deterministic queue document ID.
+
+        Deterministic IDs are central to idempotent enqueue: calling
+        ``enqueue()`` twice for the same work simply hits the same
+        document, so duplicate messages are impossible by construction.
+        """
         return f"{run_id}__{step_name}__{shard_key}"
 
     def state(self, run_id: str, step_name: str, shard_key: str = "root") -> str | None:
+        """Return the current state of a queue item, or ``None`` if absent."""
         snap = self.db.collection("factory_step_queue").document(
             self.make_queue_id(run_id, step_name, shard_key)
         ).get()
@@ -59,9 +116,13 @@ class FirestoreQueueRepo:
             "shard_key": shard_key,
             "step_input": dict(step_input or {}),
             "state": "ready",
+            # Items with a future ``available_at`` are invisible to poll
+            # queries until that moment -- used for delayed retries.
             "available_at": available_at or datetime.now(timezone.utc),
             "retry_count": 0,
             "stuck_retry_count": 0,
+            # capability_key lets workers filter for work they can do
+            # (e.g. a GPU worker polls for "tts:qwen3" items).
             "capability_key": capability_key_for_step(step_name, normalized_tts_model),
             "created_at": fs.SERVER_TIMESTAMP,
             "updated_at": fs.SERVER_TIMESTAMP,
@@ -69,9 +130,10 @@ class FirestoreQueueRepo:
         if normalized_tts_model:
             payload["required_tts_model"] = normalized_tts_model
         try:
+            # create() fails with AlreadyExists if the doc is already
+            # present -- exactly the idempotency guarantee we want.
             doc_ref.create(payload)
         except AlreadyExists:
-            # Enqueue is idempotent for the same run/step/shard key.
             pass
         return queue_id
 
@@ -80,6 +142,10 @@ class FirestoreQueueRepo:
         available_before: datetime,
         limit: int,
     ) -> list[Any]:
+        """Return up to ``limit`` queue docs that are ready for claiming.
+
+        Results are ordered oldest-first (FIFO) so starvation-free.
+        """
         query = (
             self.db.collection("factory_step_queue")
             .where("state", "==", "ready")
@@ -95,6 +161,11 @@ class FirestoreQueueRepo:
         available_before: datetime,
         limit: int,
     ) -> list[Any]:
+        """Like ``fetch_ready`` but filtered to a single capability key.
+
+        Workers with specialised hardware (GPU, specific TTS model) call
+        this so they only see work they are equipped to handle.
+        """
         query = (
             self.db.collection("factory_step_queue")
             .where("state", "==", "ready")
@@ -110,6 +181,11 @@ class FirestoreQueueRepo:
         states: Iterable[str],
         limit: int,
     ) -> list[dict]:
+        """Fetch decoded payload dicts for items in any of ``states``.
+
+        Firestore does not support ``WHERE state IN (...)`` with
+        composite indexes well, so we issue one query per state.
+        """
         payloads: list[dict] = []
         for state in states:
             query = self.db.collection("factory_step_queue").where("state", "==", state).limit(limit)
@@ -124,6 +200,9 @@ class FirestoreQueueRepo:
         states: Iterable[str],
         limit: int,
     ) -> list[Any]:
+        """Like ``fetch_payloads_by_states`` but returns raw Firestore
+        document snapshots (needed when callers must access ``.reference``).
+        """
         docs: list[Any] = []
         for state in states:
             query = self.db.collection("factory_step_queue").where("state", "==", state).limit(limit)
@@ -137,7 +216,32 @@ class FirestoreQueueRepo:
         lease_seconds: int = 300,
         payload_validator: Callable[[dict], bool] | None = None,
     ) -> dict | None:
-        """Atomically move a ready doc into the leased state for one worker."""
+        """Atomically move a ``ready`` doc into ``leased`` for one worker.
+
+        This is the **compare-and-swap (CAS) heart of the queue**.
+        Inside a Firestore transaction we:
+
+        1. Read the document (Firestore takes a read lock).
+        2. Verify ``state == "ready"`` -- if another worker already
+           claimed it, we bail out (returns ``None``).
+        3. Optionally run ``payload_validator`` for caller-defined
+           eligibility checks (e.g. capability matching).
+        4. Write ``state = "leased"`` with an expiry timestamp.
+
+        Because the read and write happen in a single Firestore
+        transaction, exactly one worker wins even under contention.
+
+        Args:
+            doc_ref: Firestore document reference for the queue item.
+            worker_id: Identifier of the claiming worker (for debugging).
+            lease_seconds: How long the lease is valid.
+            payload_validator: Optional predicate; return ``False`` to
+                skip this item without claiming it.
+
+        Returns:
+            The original payload dict on success, or ``None`` if the
+            item was already claimed or ineligible.
+        """
         now = datetime.now(timezone.utc)
         tx = self.db.transaction()
 
@@ -147,6 +251,7 @@ class FirestoreQueueRepo:
             if not snap.exists:
                 return None
             data = snap.to_dict() or {}
+            # CAS guard: only claim items that are still "ready".
             if data.get("state") != "ready":
                 return None
             if payload_validator and not payload_validator(data):
@@ -156,6 +261,8 @@ class FirestoreQueueRepo:
                 {
                     "state": "leased",
                     "lease_owner": worker_id,
+                    # Lease expiry = now + lease_seconds.  Recovery will
+                    # reclaim items whose lease_expires_at is in the past.
                     "lease_expires_at": datetime.fromtimestamp(
                         now.timestamp() + lease_seconds,
                         tz=timezone.utc,
@@ -168,7 +275,17 @@ class FirestoreQueueRepo:
         return _claim(tx)
 
     def recover_stale_leases(self, max_docs: int = 50) -> int:
-        """Reset expired leased/running queue items back to ready."""
+        """Reset expired ``leased`` / ``running`` queue items back to ``ready``.
+
+        This is the **lease-recovery safety net**.  A background cron
+        calls this periodically.  For each candidate it opens a
+        transaction to re-check the state and expiry (double-check
+        pattern) before resetting, because the initial query result may
+        be stale by the time we act on it.
+
+        Returns:
+            Number of items successfully recovered.
+        """
         now = datetime.now(timezone.utc)
         recovered = 0
 
@@ -184,6 +301,8 @@ class FirestoreQueueRepo:
 
                 @fs.transactional
                 def _recover(transaction):
+                    # Re-read inside the transaction -- the query
+                    # snapshot could be seconds old by now.
                     snap = doc.reference.get(transaction=transaction)
                     if not snap.exists:
                         return False
@@ -196,6 +315,9 @@ class FirestoreQueueRepo:
                     if lease_expires_at is None:
                         return False
 
+                    # Normalise the Firestore timestamp to a tz-aware
+                    # datetime for a safe comparison (same logic as
+                    # lease_manager.lease_expired).
                     lease_ts = (
                         datetime.fromtimestamp(lease_expires_at.timestamp(), tz=timezone.utc)
                         if hasattr(lease_expires_at, "timestamp")
@@ -206,6 +328,9 @@ class FirestoreQueueRepo:
                     if not isinstance(lease_ts, datetime) or lease_ts > now:
                         return False
 
+                    # Reset to "ready" and clear all worker/heartbeat
+                    # metadata so the item looks brand-new to the next
+                    # worker that picks it up.
                     transaction.update(
                         doc.reference,
                         {
@@ -238,7 +363,11 @@ class FirestoreQueueRepo:
         deadline_at: datetime | None = None,
         heartbeat_interval_sec: int | None = None,
     ) -> None:
-        """Promote a leased item to running once executor work actually starts."""
+        """Promote a ``leased`` item to ``running`` once work begins.
+
+        The lease is *extended* here because claiming and starting may
+        not be instantaneous (model loading, etc.).
+        """
         now = datetime.now(timezone.utc)
         self.db.collection("factory_step_queue").document(queue_id).update(
             {
@@ -269,7 +398,11 @@ class FirestoreQueueRepo:
         heartbeat_interval_sec: int | None = None,
         progress_detail: str | None = None,
     ) -> None:
-        """Refresh lease/heartbeat fields while a worker is actively executing a step."""
+        """Refresh lease and heartbeat while the worker is still alive.
+
+        Each heartbeat pushes ``lease_expires_at`` forward, preventing
+        the recovery routine from reclaiming in-progress work.
+        """
         now = datetime.now(timezone.utc)
         payload: dict[str, Any] = {
             "state": "running",
@@ -289,6 +422,7 @@ class FirestoreQueueRepo:
         self.db.collection("factory_step_queue").document(queue_id).update(payload)
 
     def mark_done(self, queue_id: str) -> None:
+        """Terminal success -- clears all lease/heartbeat metadata."""
         self.db.collection("factory_step_queue").document(queue_id).update(
             {
                 "state": "succeeded",
@@ -304,6 +438,7 @@ class FirestoreQueueRepo:
         )
 
     def mark_failed(self, queue_id: str, error_code: str, error_message: str) -> None:
+        """Terminal failure -- records the error and releases the lease."""
         self.db.collection("factory_step_queue").document(queue_id).update(
             {
                 "state": "failed",
@@ -327,6 +462,12 @@ class FirestoreQueueRepo:
         error_message: str,
         delay_seconds: int,
     ) -> None:
+        """Return the item to ``ready`` with a future ``available_at``.
+
+        The ``fs.Increment(1)`` sentinel atomically bumps ``retry_count``
+        on the server, avoiding read-modify-write races when multiple
+        retries overlap.
+        """
         available_at = datetime.fromtimestamp(
             datetime.now(timezone.utc).timestamp() + max(1, delay_seconds),
             tz=timezone.utc,
@@ -354,6 +495,10 @@ class FirestoreQueueRepo:
         queue_id: str,
         delay_seconds: int,
     ) -> None:
+        """Re-enqueue for a non-error continuation (e.g. polling for an
+        async result).  Unlike ``schedule_retry`` this does *not*
+        increment ``retry_count`` and clears error fields.
+        """
         available_at = datetime.fromtimestamp(
             datetime.now(timezone.utc).timestamp() + max(1, delay_seconds),
             tz=timezone.utc,
@@ -382,10 +527,18 @@ class FirestoreQueueRepo:
         error_code: str = "run_failed",
         error_message: str = "Run failed; pending work cancelled.",
     ) -> int:
-        """
-        Cancel queued work for a run that should no longer continue.
+        """Cancel queued work for a run that should no longer continue.
 
-        Only READY/LEASED items are cancelled; RUNNING items are handled by run-state guards.
+        Only ``ready`` / ``leased`` items are cancelled; ``running``
+        items are left alone because their executors check run-state
+        guards and will self-terminate.
+
+        Each cancellation runs inside its own transaction so that a
+        concurrent claim does not conflict -- either the claim wins
+        (and the item is no longer ``ready``) or the cancel wins.
+
+        Returns:
+            Number of items successfully cancelled.
         """
         query = self.db.collection("factory_step_queue").where("run_id", "==", run_id)
         if step_name:
@@ -398,11 +551,13 @@ class FirestoreQueueRepo:
 
             @fs.transactional
             def _cancel(transaction):
+                # Re-read inside the transaction for consistency.
                 snap = doc.reference.get(transaction=transaction)
                 if not snap.exists:
                     return False
                 data = snap.to_dict() or {}
                 state = str(data.get("state") or "")
+                # Only cancel items that haven't started executing yet.
                 if state not in {"ready", "leased"}:
                     return False
                 if str(data.get("run_id") or "") != run_id:

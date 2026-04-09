@@ -1,4 +1,31 @@
-"""Course script steps: generate raw scripts first, then QA-format each session."""
+"""Course script steps: generate raw scripts first, then QA-format each session.
+
+Architectural Role:
+    Pipeline Step -- implements two course steps:
+    (1) ``generate_course_scripts`` -- calls the LLM once per session to
+    produce narration scripts, and (2) ``format_course_scripts`` -- runs
+    QA normalization on every raw script before TTS.
+
+Design Patterns:
+    * **Iterative Generation** -- the generation step loops over all 9
+      ``SESSION_DEFS`` entries, skipping sessions that already have a raw
+      script (idempotency for retries).
+    * **Approval Checkpoint** -- two independent approval flows can pause
+      the pipeline: *initial* script approval (all sessions) and
+      *regeneration* script approval (targeted sessions only).
+    * **Prompt Engineering** -- ``_build_session_script_prompt`` tailors
+      the LLM prompt to the session type (intro / lesson / practice) by
+      injecting different context from the course plan.
+
+Key Dependencies:
+    * ``factory_v2.shared.llm_generator`` -- LLM adapter
+    * ``factory_v2.shared.qa_formatter`` -- script sanitization + formatting
+    * ``factory_v2.shared.voice_utils`` -- TTS voice display names
+    * ``course_common`` -- ``SESSION_DEFS`` and shared helpers
+
+Consumed By:
+    * ``course.py`` (re-export facade) -> ``registry.py``
+"""
 
 from __future__ import annotations
 
@@ -28,7 +55,15 @@ def _build_session_script_prompt(
     plan: dict,
     job_data: dict,
 ) -> str:
-    """Build a prompt tailored to the intro/lesson/practice flavor of one session."""
+    """Build a prompt tailored to the intro/lesson/practice flavor of one session.
+
+    Each session type gets a different prompt template:
+        * **intro** -- references the course goal and intro outline.
+        * **lesson** -- references the module objective and lesson summary.
+        * **practice** -- references reflection prompts and practice type.
+
+    The word budget is calculated from the target duration at ~130 words/min.
+    """
     params = job_data.get("params", {})
     course_code = params.get("courseCode", "COURSE101")
     course_title = params.get("courseTitle", plan.get("courseTitle", "Untitled"))
@@ -127,7 +162,19 @@ def _build_session_script_prompt(
 
 
 def execute_generate_course_scripts(ctx: StepContext) -> StepResult:
-    """Generate any missing session scripts and optionally stop for approval."""
+    """Generate any missing session scripts and optionally stop for approval.
+
+    Iterates over all 9 SESSION_DEFS and generates a script for each session
+    that does not yet have one cached in ``runtime.course_raw_scripts``.  The
+    LLM adapter is lazily initialized only when at least one script is needed.
+
+    After generation, two independent approval flows are checked:
+        * **Regeneration approval** -- only the targeted sessions need review.
+        * **Initial approval** -- all sessions need review before TTS begins.
+
+    If neither approval is required, the step completes normally and the
+    pipeline advances to ``format_course_scripts``.
+    """
     from factory_v2.shared.llm_generator import _get_llm_adapter
 
     job_data = _content_job_data(ctx.job)
@@ -138,10 +185,12 @@ def execute_generate_course_scripts(ctx: StepContext) -> StepResult:
 
     course_code = _course_code(job_data)
     raw_scripts: dict[str, str] = dict(runtime.get("course_raw_scripts") or job_data.get("courseRawScripts") or {})
+    # Lazy init: only create the adapter if we actually need to generate.
     adapter = None
 
     for index, session_def in enumerate(SESSION_DEFS):
         session_code = f"{course_code}{session_def['suffix']}"
+        # Idempotency: skip sessions that already have a raw script.
         if raw_scripts.get(session_code, "").strip():
             continue
 
@@ -150,8 +199,10 @@ def execute_generate_course_scripts(ctx: StepContext) -> StepResult:
         prompt = _build_session_script_prompt(session_def, plan, job_data)
         raw_script = adapter.generate(
             prompt,
+            # Token budget: 2x the word estimate to give the LLM headroom.
             max_tokens=max(2048, session_def["duration_min"] * 130 * 2),
         )
+        # Strip the end-of-script sentinel the LLM was asked to produce.
         for marker in ["---END---", "<end_of_script>"]:
             if marker in raw_script:
                 raw_script = raw_script[: raw_script.index(marker)].strip()
@@ -166,14 +217,21 @@ def execute_generate_course_scripts(ctx: StepContext) -> StepResult:
         )
         ctx.progress(f"Generated script {index + 1}/{len(SESSION_DEFS)} ({session_code})")
 
+    # Build a truncated preview of each script for the admin UI (avoid storing
+    # full scripts twice in the compat patch).
     preview = {key: f"{value[:200]}..." for key, value in raw_scripts.items()}
+
+    # --- Approval checkpoint logic ---
+    # Two independent approval flows can pause the pipeline here.
     regeneration = _course_regeneration(runtime, job_data)
     script_approval = _course_script_approval(runtime, job_data)
+    # Check 1: regeneration-specific approval (narrower scope).
     await_regeneration_script_approval = (
         bool(regeneration.get("active"))
         and str(regeneration.get("mode") or "").strip().lower() == "script_and_audio"
         and not bool(regeneration.get("scriptApprovedAt") or regeneration.get("scriptApprovedBy"))
     )
+    # Check 2: initial script approval (all sessions).
     await_initial_script_approval = (
         bool(script_approval.get("enabled"))
         and not bool(script_approval.get("scriptApprovedAt") or script_approval.get("scriptApprovedBy"))
@@ -246,7 +304,16 @@ def execute_generate_course_scripts(ctx: StepContext) -> StepResult:
 
 
 def execute_format_course_scripts(ctx: StepContext) -> StepResult:
-    """Normalize each raw session script so TTS receives cleaner narration text."""
+    """Normalize each raw session script so TTS receives cleaner narration text.
+
+    Iterates over all 9 sessions and applies ``format_script`` to each raw
+    script that has not already been formatted.  If formatting raises a
+    ``ValueError`` (e.g. empty input), the raw script is used as-is rather
+    than failing the pipeline.
+
+    On completion, sets the compat status to ``"tts_pending"`` with a
+    Firestore server timestamp so the admin UI shows when formatting ended.
+    """
     from factory_v2.shared.qa_formatter import format_script
 
     job_data = _content_job_data(ctx.job)

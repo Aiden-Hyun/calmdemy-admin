@@ -1,4 +1,35 @@
-"""Bridge from legacy `content_jobs` documents into V2 workflow state."""
+"""Bridge from legacy ``content_jobs`` documents into V2 workflow state.
+
+Architectural Role:
+    This module is the **Composition Root** for a single V2 pipeline run.
+    It reads a legacy ``content_jobs`` document, translates its fields
+    into the V2 domain model (``factory_jobs`` + ``factory_job_runs`` +
+    ``factory_step_queue``), and wires together the repos and
+    orchestrator needed to start execution.
+
+Design Patterns:
+    * **Composition Root / Dependency Wiring** -- All concrete repo
+      instances (``FirestoreJobRepo``, etc.) are created here and passed
+      to the ``Orchestrator``.  No other module needs to know which
+      storage backend is in use.
+    * **Anti-Corruption Layer** -- ``_extract_runtime`` translates the
+      legacy flat-document schema into the canonical V2 runtime shape.
+      This keeps the rest of V2 decoupled from historical field names.
+    * **Resumable Pipeline Start** -- The complex ``first_step``
+      selection logic inspects existing state (script approvals, course
+      plans, regeneration flags) so a re-dispatched job resumes at the
+      earliest incomplete step rather than restarting from scratch.
+
+Key Dependencies:
+    * ``Orchestrator`` (application layer) -- called to ``start_new_run``
+      and optionally enqueue parallel thumbnail steps.
+    * ``Firestore*Repo`` classes (infrastructure layer) -- concrete
+      implementations of the repository ports.
+
+Consumed By:
+    * ``dispatcher.py`` calls ``bootstrap_from_content_job`` after
+      successfully claiming a legacy job.
+"""
 
 from __future__ import annotations
 
@@ -66,10 +97,27 @@ def _course_generates_thumbnail_during_run(content_job: dict) -> bool:
 
 
 def bootstrap_from_content_job(db, content_job_id: str, content_job: dict | None = None) -> str:
-    """
-    Create/merge a factory_v2 job from an existing content_jobs doc and start a run.
+    """Create or merge a V2 job from a legacy ``content_jobs`` doc and start a run.
 
-    Returns the V2 run id.
+    This is the main entry-point for the Composition Root.  It:
+
+    1. Reads (or receives) the legacy document.
+    2. Determines the correct ``first_step`` based on content type,
+       approval state, and regeneration flags.
+    3. Writes the ``factory_jobs`` document with the translated runtime.
+    4. Instantiates all repos + the Orchestrator (dependency wiring).
+    5. Calls ``orchestrator.start_new_run`` to create the run and enqueue
+       the first step(s).
+    6. Stamps the legacy doc with the V2 run ID for cross-referencing.
+
+    Args:
+        db: Firestore client instance.
+        content_job_id: Document ID in the ``content_jobs`` collection.
+        content_job: Pre-fetched document data (avoids a redundant read
+            when the dispatcher already has it).
+
+    Returns:
+        The newly created V2 run ID.
     """
     source_ref = db.collection("content_jobs").document(content_job_id)
 
@@ -85,6 +133,9 @@ def bootstrap_from_content_job(db, content_job_id: str, content_job: dict | None
     is_subject = content_type == "full_subject"
     generate_thumbnail_during_run = _course_generates_thumbnail_during_run(content_job)
 
+    # --- Determine the first step (the resumable-pipeline logic) ---
+    # Default first step depends on content type; the conditionals below
+    # refine it when prior work (plans, scripts, approvals) already exists.
     trigger = "bootstrap"
     first_step = "generate_course_plan" if is_course else "generate_subject_plan" if is_subject else None
     if status == "pending" and is_course:
@@ -164,9 +215,12 @@ def bootstrap_from_content_job(db, content_job_id: str, content_job: dict | None
                 ):
                     first_step = "format_script"
     if status == "publishing":
+        # Manual re-publish from the admin UI -- skip straight to publish.
         trigger = "manual_publish"
         first_step = "publish_course" if is_course else "publish_content"
 
+    # --- Write the V2 factory_jobs document ---
+    # Use the content_job_id as the V2 job ID for easy cross-referencing.
     v2_job_id = content_job_id
     job_ref = db.collection("factory_jobs").document(v2_job_id)
     existing_job_snap = job_ref.get()
@@ -196,6 +250,7 @@ def bootstrap_from_content_job(db, content_job_id: str, content_job: dict | None
         }
     )
 
+    # --- Composition Root: wire repos + orchestrator for this run ---
     job_repo = FirestoreJobRepo(db)
     run_repo = FirestoreRunRepo(db)
     step_run_repo = FirestoreStepRunRepo(db)
@@ -208,6 +263,10 @@ def bootstrap_from_content_job(db, content_job_id: str, content_job: dict | None
         first_step=first_step,
     )
 
+    # For script-regeneration runs that jump into the middle of the course
+    # workflow, ensure the thumbnail step is also enqueued when the course
+    # still needs one.  This lets thumbnail generation run in parallel with
+    # the script pipeline.
     if (
         is_course
         and first_step in {"generate_course_scripts", "format_course_scripts"}
@@ -223,6 +282,8 @@ def bootstrap_from_content_job(db, content_job_id: str, content_job: dict | None
             "generate_course_thumbnail",
         )
 
+    # Stamp the legacy doc with the V2 run ID so the admin UI and
+    # dispatcher can cross-reference the two systems.
     source_ref.set(
         {
             "engine": "v2",

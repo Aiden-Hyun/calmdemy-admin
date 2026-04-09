@@ -1,4 +1,37 @@
-"""Artifact-lineage and timing helpers for answering "what produced this output?"."""
+"""Artifact-lineage and timing helpers for answering "what produced this output?".
+
+Architectural Role:
+    Tracks the provenance of every artifact produced by the content factory.
+    Each pipeline step that creates or transforms an artifact (script, audio,
+    image, published content) emits a lineage record containing:
+
+    - **origin_job_id / origin_run_id / origin_step_run_id** -- who produced it.
+    - **dependency_artifact_keys** -- what inputs it consumed.
+    - **dependency_child_job_ids** -- child jobs it aggregated (for subjects).
+
+    At the end of a successful job, ``finalize_job_timing`` walks the
+    dependency graph backward from the "root" artifact (e.g. ``single.publish``
+    or ``course.publish``) to compute:
+
+    - **effective_elapsed_ms** -- wall-clock time (merged, non-overlapping).
+    - **effective_worker_ms** -- total CPU time across all contributing steps.
+    - **reuse_credit_ms** -- time saved by reusing artifacts from prior runs.
+    - **wasted_worker_ms** -- time spent on steps that were later superseded.
+    - **queue_latency_ms** -- time between job creation and first step start.
+    - **parallelism_factor** -- worker_ms / elapsed_ms (>1 means parallelism).
+
+    These metrics power the admin dashboard's pipeline-performance views.
+
+Key Dependencies:
+    - firebase_admin.firestore  -- Firestore SDK
+    - factory_step_runs collection -- per-step execution records
+    - factory_job_lineage collection -- persisted lineage documents
+
+Consumed By:
+    - factory_v2 step runner (writes per-step artifacts via ``build_artifact_updates``)
+    - factory_v2 completion handler (calls ``finalize_job_timing``)
+    - Admin performance dashboard
+"""
 
 from __future__ import annotations
 
@@ -14,6 +47,7 @@ LINEAGE_COLLECTION = "factory_job_lineage"
 
 
 def _coerce_datetime(value: Any) -> datetime | None:
+    """Convert a Firestore timestamp to a Python datetime (see metrics.py)."""
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -26,17 +60,20 @@ def _coerce_datetime(value: Any) -> datetime | None:
 
 
 def _runtime(job: dict[str, Any]) -> dict[str, Any]:
+    """Safely extract the ``runtime`` sub-dict from a factory job document."""
     payload = job.get("runtime")
     return dict(payload) if isinstance(payload, dict) else {}
 
 
 def _content_job(job: dict[str, Any]) -> dict[str, Any]:
+    """Extract the embedded content-job payload from the request envelope."""
     request = job.get("request") or {}
     payload = request.get("content_job") or request.get("job_data") or {}
     return dict(payload) if isinstance(payload, dict) else {}
 
 
 def _job_type(job: dict[str, Any]) -> str:
+    """Determine the job type: ``"single_content"``, ``"course"``, or ``"subject"``."""
     job_type = str(job.get("job_type") or "").strip().lower()
     if job_type:
         return job_type
@@ -55,11 +92,13 @@ def _compat_content_job_id(job: dict[str, Any]) -> str:
 
 
 def step_run_id(run_id: str, step_name: str, shard_key: str = "root") -> str:
+    """Build a composite ID for a single step execution: ``<run>__<step>__<shard>``."""
     normalized_shard = str(shard_key or "root").strip() or "root"
     return f"{run_id}__{step_name}__{normalized_shard}"
 
 
 def now_utc() -> datetime:
+    """Return the current time in UTC (convenience wrapper)."""
     return datetime.now(timezone.utc)
 
 
@@ -73,6 +112,7 @@ def artifact_record(
     dependency_artifact_keys: list[str] | None = None,
     dependency_child_job_ids: list[str] | None = None,
 ) -> dict[str, Any]:
+    """Create a lineage record dict for one produced artifact."""
     return {
         "artifact_key": artifact_key,
         "kind": kind,
@@ -86,6 +126,7 @@ def artifact_record(
 
 
 def copy_artifacts(job: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Deep-copy the artifact registry from a job's runtime dict."""
     artifacts = _runtime(job).get("artifacts") or {}
     if not isinstance(artifacts, dict):
         return {}
@@ -147,7 +188,17 @@ def build_artifact_updates(
     step_input: dict[str, Any] | None = None,
     step_output: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Derive lineage records that should be attached after a successful step."""
+    """Derive lineage records that should be attached after a successful step.
+
+    Compares the job's ``runtime`` dict before and after the step to detect
+    which artifacts were created or changed.  For each new artifact a
+    lineage record is emitted, including pointers to the upstream artifacts
+    it depends on.  The caller merges these into the job document.
+
+    The function dispatches on job type (single_content / course / subject)
+    because each type has a different set of artifact keys and dependency
+    chains.
+    """
     step_input = dict(step_input or {})
     step_output = dict(step_output or {})
     before_runtime = _runtime(before_job)
@@ -379,6 +430,7 @@ def merge_artifacts(
     existing: dict[str, dict[str, Any]] | None,
     updates: dict[str, dict[str, Any]] | None,
 ) -> dict[str, dict[str, Any]]:
+    """Merge new artifact records into the existing registry (deep-copied)."""
     merged = deepcopy(existing or {})
     merged.update(deepcopy(updates or {}))
     return merged
@@ -408,6 +460,11 @@ def _step_run_interval(doc: dict[str, Any]) -> tuple[int, int] | None:
 
 
 def _merge_intervals(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Merge overlapping time intervals to avoid double-counting parallel steps.
+
+    Classic sweep-line algorithm: sort by start, then greedily merge any
+    interval whose start falls within the current merged interval.
+    """
     if not intervals:
         return []
     sorted_intervals = sorted(intervals)
@@ -422,11 +479,16 @@ def _merge_intervals(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]:
 
 
 def _duration_ms(intervals: Iterable[tuple[int, int]]) -> int:
+    """Sum the durations of non-overlapping intervals in milliseconds."""
     return sum(max(0, end_ms - start_ms) for start_ms, end_ms in intervals)
 
 
 def compute_live_run_elapsed_ms(db, job_id: str, run_id: str) -> int:
-    """Approximate active runtime by merging step intervals without double-counting overlap."""
+    """Approximate active runtime by merging step intervals without double-counting overlap.
+
+    For still-running steps the current wall-clock time is used as the end
+    point, giving a live "elapsed so far" value for the admin dashboard.
+    """
     intervals: list[tuple[int, int]] = []
     now_ms = int(now_utc().timestamp() * 1000)
     for doc in _step_run_docs_for_job(db, job_id):
@@ -456,6 +518,12 @@ def _collect_contributing_artifacts(
     artifacts: dict[str, dict[str, Any]],
     root_artifact_keys: list[str],
 ) -> tuple[set[str], set[str], set[str], set[str]]:
+    """Walk the artifact dependency graph backward from roots to collect all contributors.
+
+    Returns:
+        A 4-tuple of sets: (step_run_ids, run_ids, artifact_keys, child_job_ids)
+        that transitively contributed to producing the root artifacts.
+    """
     contributing_step_run_ids: set[str] = set()
     contributing_run_ids: set[str] = set()
     contributing_artifact_keys: set[str] = set()
@@ -555,7 +623,20 @@ def finalize_job_timing(
     run_id: str,
     content_job_id: str,
 ) -> dict[str, Any] | None:
-    """Persist final timing/lineage summaries once a run has truly produced publishable output."""
+    """Persist final timing/lineage summaries once a run has produced publishable output.
+
+    High-level algorithm:
+        1. Load the factory job and content job documents.
+        2. Identify root artifact keys (e.g. ``single.publish``).
+        3. Walk the dependency graph to find all contributing step runs.
+        4. Merge their time intervals to compute effective elapsed time.
+        5. Compute reuse credits, wasted time, queue latency, parallelism.
+        6. Write the lineage document and update the content job with timing.
+
+    Returns:
+        Combined lineage + timing payload dict, or None if the job is not
+        in a publishable state (e.g. root artifacts not yet produced).
+    """
     if not job_id or not content_job_id or not run_id:
         return None
 

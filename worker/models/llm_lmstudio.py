@@ -1,4 +1,26 @@
-"""LM Studio LLM adapter — calls the OpenAI-compatible API at localhost:1234."""
+"""LM Studio LLM adapter -- calls the OpenAI-compatible API at localhost:1234.
+
+Architectural Role:
+    Concrete **Strategy** (``LLMBase``) for locally-hosted models served
+    by `LM Studio <https://lmstudio.ai>`_.  LM Studio exposes an
+    OpenAI-compatible REST API, so this adapter uses the
+    ``/v1/chat/completions`` endpoint -- the same shape as the OpenAI
+    Python SDK would use, but we call it with plain ``urllib`` to avoid
+    an extra dependency.
+
+Design Patterns:
+    - **Strategy** -- interchangeable with ``GeminiAPIAdapter`` /
+      ``OllamaAdapter`` behind the ``LLMBase`` interface.
+    - **Adapter** -- translates ``generate(prompt)`` into OpenAI
+      chat-completions JSON.
+
+Key Dependencies:
+    - A running LM Studio local server (default ``http://localhost:1234``)
+    - Override host via ``LMSTUDIO_HOST`` env var
+
+Consumed By:
+    - ``worker.models.registry`` (via ``_lmstudio_factory``)
+"""
 
 import os
 import json
@@ -12,11 +34,15 @@ logger = get_logger(__name__)
 
 
 class LMStudioAdapter(LLMBase):
-    """LLM adapter that uses a locally running LM Studio server.
+    """LLM adapter that delegates generation to a local LM Studio server.
 
-    LM Studio exposes an OpenAI-compatible API at http://localhost:1234/v1.
-    The user loads any model in LM Studio's UI; this adapter calls it via
-    the chat completions endpoint.
+    LM Studio exposes an OpenAI-compatible API at
+    ``http://localhost:1234/v1``.  The user loads any GGUF model in
+    LM Studio's GUI; this adapter talks to whichever model is currently
+    active via the ``/v1/chat/completions`` endpoint.
+
+    Attributes:
+        DEFAULT_HOST: LM Studio's default listen address.
     """
 
     DEFAULT_HOST = "http://localhost:1234"
@@ -25,9 +51,14 @@ class LMStudioAdapter(LLMBase):
         self._host = os.getenv("LMSTUDIO_HOST", self.DEFAULT_HOST)
 
     def load(self, model_dir: str) -> None:
-        """Verify LM Studio is reachable and a model is loaded."""
+        """Verify LM Studio is reachable and at least one model is loaded.
+
+        Args:
+            model_dir: Ignored; LM Studio manages its own model storage.
+        """
         logger.info("Checking LM Studio", extra={"host": self._host})
         try:
+            # OpenAI-compatible /v1/models endpoint lists loaded models
             req = urllib.request.Request(f"{self._host}/v1/models")
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode())
@@ -45,9 +76,22 @@ class LMStudioAdapter(LLMBase):
             )
 
     def generate(self, prompt: str, max_tokens: int = 4096) -> str:
-        """Generate text using the LM Studio OpenAI-compatible API."""
+        """Send *prompt* to LM Studio's ``/v1/chat/completions`` endpoint.
+
+        The prompt is wrapped in a single ``user`` message, matching the
+        OpenAI chat-completions format that LM Studio expects.
+
+        Args:
+            prompt: Full prompt string.
+            max_tokens: Maximum output tokens.
+
+        Returns:
+            Generated text, whitespace-stripped.
+        """
         logger.info("Generating with LM Studio")
 
+        # Wrap prompt as a chat message -- LM Studio uses OpenAI's
+        # chat/completions format, not a raw prompt string.
         payload = json.dumps({
             "messages": [
                 {"role": "user", "content": prompt},
@@ -65,11 +109,13 @@ class LMStudioAdapter(LLMBase):
         )
 
         try:
+            # 10-minute timeout: local generation can be slow on CPU
             with urllib.request.urlopen(req, timeout=600) as resp:
                 data = json.loads(resp.read().decode())
                 choices = data.get("choices", [])
                 if not choices:
                     raise RuntimeError("LM Studio returned no choices")
+                # Navigate OpenAI response shape: choices[0].message.content
                 text = choices[0].get("message", {}).get("content", "")
                 logger.info("LM Studio generated text", extra={"chars": len(text)})
                 return text.strip()
@@ -79,5 +125,5 @@ class LMStudioAdapter(LLMBase):
             raise RuntimeError(f"Invalid JSON from LM Studio: {e}")
 
     def unload(self) -> None:
-        """No resources to free — LM Studio manages its own models."""
+        """No-op -- LM Studio manages its own GPU memory lifecycle."""
         pass

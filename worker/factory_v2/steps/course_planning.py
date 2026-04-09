@@ -1,4 +1,28 @@
-"""Course planning steps: generate the course outline first, then the thumbnail."""
+"""Course planning steps: generate the course outline first, then the thumbnail.
+
+Architectural Role:
+    Pipeline Step -- implements the first two steps of the course pipeline:
+    (1) generate the structured course plan (outline with modules, lessons,
+    and practices), and (2) generate or reuse the course thumbnail image.
+
+Design Patterns:
+    * **Defensive JSON Parsing** -- LLM output is notoriously messy.
+      ``_parse_plan`` implements a three-tier fallback: raw ``json.loads``,
+      then cleaned/extracted JSON, then ``ast.literal_eval`` as a last
+      resort.  This resilience prevents a single formatting glitch from
+      failing the entire pipeline.
+    * **Idempotency** -- both steps check ``runtime`` for cached results
+      before invoking expensive operations (LLM calls, image generation).
+
+Key Dependencies:
+    * ``factory_v2.shared.llm_generator`` -- LLM adapter for plan generation
+    * ``factory_v2.shared.image_generator`` -- thumbnail generation
+    * ``factory_v2.shared.storage_uploader`` -- Cloud Storage upload
+    * ``system_prompts/course_system_prompt.txt`` -- the system prompt file
+
+Consumed By:
+    * ``course.py`` (re-export facade) -> ``registry.py``
+"""
 
 from __future__ import annotations
 
@@ -18,6 +42,7 @@ logger = get_logger(__name__)
 
 
 def _load_system_prompt() -> str:
+    """Load the course-plan system prompt from the ``system_prompts/`` directory."""
     prompt_path = os.path.join(
         os.path.dirname(__file__), "..", "..", "system_prompts", "course_system_prompt.txt"
     )
@@ -26,7 +51,12 @@ def _load_system_prompt() -> str:
 
 
 def _build_course_plan_prompt(job_data: dict) -> str:
-    """Build the tightly constrained JSON-only prompt for course-plan generation."""
+    """Build the tightly constrained JSON-only prompt for course-plan generation.
+
+    The prompt includes the system prompt, course metadata from job params,
+    and a strict JSON schema the LLM must follow.  The exact format is
+    enforced so ``_parse_plan`` can reliably extract the result.
+    """
     params = job_data.get("params", {})
     system_prompt = _load_system_prompt()
 
@@ -106,6 +136,11 @@ Rules:
 
 
 def _extract_json_object(text: str) -> str:
+    """Extract the first balanced ``{...}`` block from arbitrary text.
+
+    LLMs sometimes wrap JSON in prose or markdown.  This brace-counting
+    approach isolates the JSON object regardless of surrounding noise.
+    """
     start = text.find("{")
     if start == -1:
         raise ValueError("No JSON object start found")
@@ -122,6 +157,11 @@ def _extract_json_object(text: str) -> str:
 
 
 def _clean_json_text(text: str) -> str:
+    """Normalize common LLM formatting mistakes so ``json.loads`` can succeed.
+
+    Fixes include: smart quotes -> straight quotes, SSML ``<break>`` tags ->
+    ``[PAUSE]`` markers, and trailing commas before closing braces/brackets.
+    """
     cleaned = text
     cleaned = cleaned.replace("“", '"').replace("”", '"')
     cleaned = cleaned.replace("‘", "'").replace("’", "'")
@@ -132,8 +172,15 @@ def _clean_json_text(text: str) -> str:
 
 
 def _parse_plan(raw: str) -> dict:
-    """Parse model output defensively, repairing common JSON-ish formatting mistakes."""
+    """Parse model output defensively, repairing common JSON-ish formatting mistakes.
+
+    Three-tier fallback strategy:
+        1. Try ``json.loads`` on the raw text (fast path for well-formed output).
+        2. Extract the first ``{...}`` block, clean it, and retry.
+        3. Convert JSON keywords to Python and use ``ast.literal_eval``.
+    """
     text = raw.strip()
+    # Strip markdown code fences if the LLM wrapped the JSON in ```...```.
     if text.startswith("```"):
         first_newline = text.index("\n")
         last_fence = text.rfind("```")
@@ -158,12 +205,22 @@ def _parse_plan(raw: str) -> dict:
 
 
 def execute_generate_course_plan(ctx: StepContext) -> StepResult:
-    """Generate the reusable course plan unless one already exists in runtime/request data."""
+    """Generate the reusable course plan unless one already exists in runtime/request data.
+
+    The plan is a JSON structure containing the course title, goal, intro
+    outline, and four modules (each with lesson + practice details).  All
+    downstream steps (scripts, TTS, publish) read from this plan.
+
+    Idempotency:
+        Skips LLM generation if ``runtime.course_plan`` or
+        ``job_data.coursePlan`` already contains a valid plan.
+    """
     from factory_v2.shared.llm_generator import _get_llm_adapter
 
     job_data = _content_job_data(ctx.job)
     runtime = _runtime(ctx.job)
 
+    # Idempotency: reuse an existing plan from runtime or the original request.
     plan = runtime.get("course_plan") or job_data.get("coursePlan")
     if not plan:
         adapter = _get_llm_adapter(job_data)
@@ -186,7 +243,12 @@ def execute_generate_course_plan(ctx: StepContext) -> StepResult:
 
 
 def execute_generate_course_thumbnail(ctx: StepContext) -> StepResult:
-    """Generate or reuse the course thumbnail and project its storage metadata."""
+    """Generate or reuse the course thumbnail and project its storage metadata.
+
+    When ``force_regenerate`` is true (admin-triggered), the image prompt is
+    rebuilt from the latest plan so the thumbnail reflects the current course
+    contents rather than stale copy.
+    """
     from factory_v2.shared.image_generator import build_image_prompt, generate_image
     from factory_v2.shared.storage_uploader import upload_image
 

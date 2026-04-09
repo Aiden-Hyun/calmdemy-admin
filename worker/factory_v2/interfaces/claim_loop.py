@@ -1,4 +1,44 @@
-"""Worker-side loop that claims queue items, executes steps, and projects results."""
+"""Worker-side loop that claims queue items, executes steps, and projects results.
+
+Architectural Role:
+    The claim loop is the **execution engine** of an individual worker
+    process.  It sits on the driving side of hexagonal architecture,
+    receiving work from the Firestore queue (an external trigger) and
+    delegating to step executors in the application layer.
+
+Design Patterns:
+    * **Lease-Based Work Distribution** -- Instead of push-based message
+      delivery (e.g. Pub/Sub), workers compete for queue items by
+      atomically setting a ``lease_owner`` field in Firestore.  Leases
+      expire after a configurable timeout so that work automatically
+      returns to the pool if a worker dies.
+    * **Heartbeat + Watchdog** -- While a step executes, a background
+      ``StepExecutionWatchdog`` thread extends the lease and publishes
+      heartbeat timestamps.  The ``RecoveryManager`` watches these
+      heartbeats to detect stuck steps.
+    * **Retry with Exponential Backoff** -- Transient failures
+      (timeouts, Firestore errors, LLM/TTS errors) are retried up to
+      ``max_step_retries`` with ``5 * 2^n`` second delays, capped at
+      300 s.  Retry scheduling lives here (not inside executors) so
+      every step gets the same backoff policy.
+    * **Supersession Guard** -- Before writing results, the loop checks
+      that the run is still the active one.  If a newer run has taken
+      over the job, the stale step is marked ``superseded`` instead of
+      projecting outdated data.
+
+Key Dependencies:
+    * ``QueueScheduler`` (queue_policy.py) -- capability-aware ranking
+      of ready queue items.
+    * ``StepExecutionWatchdog`` (step_watchdog.py) -- background
+      heartbeat thread for lease extension.
+    * ``get_executor`` (steps/registry.py) -- registry lookup that maps
+      step names to their executor functions.
+    * ``Orchestrator`` -- notified on step success/failure to advance
+      the pipeline DAG.
+
+Consumed By:
+    * ``WorkerMain.run_forever`` calls ``ClaimLoop.run_once`` every tick.
+"""
 
 from __future__ import annotations
 
@@ -31,7 +71,33 @@ logger = get_logger(__name__)
 
 
 class ClaimLoop:
-    """One worker process's execution engine for V2 queue items."""
+    """One worker process's execution engine for V2 queue items.
+
+    Each call to ``run_once`` performs exactly one claim-execute-project
+    cycle.  The caller (``WorkerMain``) decides how often to call it and
+    what to do when no work is found (sleep).
+
+    Args:
+        db: Firestore client instance.
+        worker_id: Unique identifier for the owning worker process.
+        job_repo: Repository for ``factory_jobs`` documents.
+        run_repo: Repository for ``factory_job_runs`` documents.
+        step_run_repo: Repository for ``factory_step_runs`` documents.
+        queue_repo: Repository for ``factory_step_queue`` documents.
+        event_repo: Append-only event log repository.
+        orchestrator: Application-layer DAG coordinator.
+        accept_non_tts_steps: Whether this stack handles non-TTS work.
+        supported_tts_models: TTS model names this stack can execute.
+        extra_capability_keys: Additional capability keys for claiming.
+        max_step_retries: Retry budget per step for transient errors.
+        claim_candidate_limit: Max queue docs fetched per claim attempt.
+        tts_per_job_soft_limit: Soft cap on concurrent TTS steps per job.
+        worker_type: ``"local"`` or ``"cloud"`` deployment flavour.
+        poll_interval_sec: Used for worker status heartbeat interval.
+        stack_id: Logical stack this process belongs to.
+        process_id: OS PID for admin observability.
+        capability_keys: Pre-computed capability key list.
+    """
 
     def __init__(
         self,
@@ -85,8 +151,17 @@ class ClaimLoop:
         self.capability_keys = list(capability_keys)
         self.queue_scheduler = QueueScheduler(queue_repo)
 
+    # ------------------------------------------------------------------
+    # Retry policy -- centralised so every step gets the same backoff
+    # ------------------------------------------------------------------
+
     @staticmethod
     def _is_retryable(error_code: str) -> bool:
+        """Return True for transient error classes that are worth retrying.
+
+        Non-retryable errors (e.g. ``validation_error``) fail immediately
+        because retrying them would just waste time.
+        """
         return error_code in {
             "timeout",
             "firestore_error",
@@ -97,6 +172,7 @@ class ClaimLoop:
 
     @staticmethod
     def _retry_delay_seconds(retry_count: int) -> int:
+        """Compute exponential backoff: 5s, 10s, 20s, ... capped at 300s."""
         return min(300, 5 * (2 ** max(0, retry_count)))
 
     def _step_log_fields(
@@ -107,6 +183,7 @@ class ClaimLoop:
         attempt: int | None = None,
         extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Build a structured-log dict for consistent step-level logging."""
         fields: dict[str, Any] = {
             "queue_id": queue_id,
             "job_id": str(payload.get("job_id") or "").strip(),
@@ -158,12 +235,31 @@ class ClaimLoop:
             patch["courseProgress"] = course_progress
         self.job_repo.patch_compat_content_job_for_run(content_job_id, run_id, patch)
 
+    # ------------------------------------------------------------------
+    # Core claim-execute-project cycle
+    # ------------------------------------------------------------------
+
     def run_once(self) -> bool:
         """Claim at most one queue item, execute it, and project the outcome.
 
-        Returning `True` means the worker did some useful work this tick, even
-        if that work was ultimately a retry/failure projection.
+        This is the single-step-per-tick workhorse.  The lifecycle is:
+
+        1. **Claim** -- ``QueueScheduler.claim_next`` atomically leases a
+           ready queue doc.  If nothing is available, return ``False``.
+        2. **Guard** -- verify the parent job and run still exist and are
+           in a valid state (not superseded, not cancelled).
+        3. **Execute** -- look up the step executor from the registry,
+           build a ``StepContext``, and run it under a heartbeat watchdog.
+        4. **Project** -- on success, write results to repos, update the
+           compatibility ``content_jobs`` doc, record artifacts, and tell
+           the orchestrator to enqueue the next step(s).  On failure,
+           decide between retry and terminal failure.
+
+        Returns:
+            ``True`` if work was performed (success, retry, or failure
+            projection), ``False`` if the queue was empty.
         """
+        # ---- 1. Claim ----
         claimed = self.queue_scheduler.claim_next(
             worker_id=self.worker_id,
             accept_non_tts_steps=self.accept_non_tts_steps,
@@ -173,8 +269,9 @@ class ClaimLoop:
             tts_per_job_soft_limit=self.tts_per_job_soft_limit,
         )
         if not claimed:
-            return False
+            return False  # Queue is empty for our capability set.
 
+        # ---- 2. Unpack payload and look up the parent job ----
         queue_id, payload = claimed
         job_id = str(payload.get("job_id") or "").strip()
         run_id = str(payload.get("run_id") or "").strip()
@@ -279,12 +376,16 @@ class ClaimLoop:
             )
             return True
 
+        # ---- 3. Project "running" status and start heartbeat watchdog ----
         request = claimed_job.get("request") or {}
         compat = request.get("compat") or {}
         content_job_id = str(compat.get("content_job_id") or "").strip()
+        # Update the legacy content_jobs doc so the admin UI shows progress.
         patch_running_status(self.job_repo, content_job_id, run_id, step_name)
         capability_key = capability_key_for_payload(payload)
         required_tts_model = str(payload.get("required_tts_model") or "").strip().lower() or None
+        # The watchdog runs on a background thread, extending the lease and
+        # writing heartbeat timestamps until the step finishes or times out.
         watchdog = StepExecutionWatchdog(
             queue_repo=self.queue_repo,
             step_run_repo=self.step_run_repo,
@@ -339,9 +440,11 @@ class ClaimLoop:
             ),
         )
 
+        # ---- 4. Execute the step under the watchdog ----
         try:
             watchdog.start()
             try:
+                # Resolve the step name to its executor function via the registry.
                 executor = get_executor(step_name)
                 ctx = StepContext(
                     db=self.db,
@@ -414,6 +517,7 @@ class ClaimLoop:
                 )
                 return True
 
+            # ---- 5a. Project success ----
             self.step_run_repo.mark_succeeded(step_run_id, result.output)
             self.queue_repo.mark_done(queue_id)
             self.event_repo.emit(
@@ -473,6 +577,7 @@ class ClaimLoop:
             return True
 
         except Exception as exc:
+            # ---- 5b. Project failure (retry or terminal) ----
             error_msg = f"{type(exc).__name__}: {exc}"
             error_code = classify_error(exc)
             retryable = self._is_retryable(error_code)
@@ -552,6 +657,11 @@ class ClaimLoop:
             return True
 
     def _write_worker_status(self, current_step: dict[str, Any] | None) -> None:
+        """Callback invoked by the watchdog to publish active-step info.
+
+        Passing ``None`` clears the current step, signalling that the
+        worker is idle and ready for the next claim.
+        """
         update_worker_status(
             self.db,
             self.worker_id,

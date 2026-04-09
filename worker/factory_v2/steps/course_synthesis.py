@@ -1,4 +1,35 @@
-"""Course audio synthesis steps, including chunk fan-out and session fan-in."""
+"""Course audio synthesis steps, including chunk fan-out and session fan-in.
+
+Architectural Role:
+    Pipeline Step -- implements the two TTS steps of the course pipeline:
+    (1) ``synthesize_course_audio_chunk`` (fan-out: one chunk of one session),
+    and (2) ``synthesize_course_audio`` (fan-in: assemble chunks into the
+    final session audio, or fallback linear synthesis of an entire session).
+
+Design Patterns:
+    * **Fan-out / Fan-in** -- long session scripts are split into chunks
+      that can be synthesized in parallel by separate workers.  Each chunk
+      shard produces one WAV file.  The session-level shard then assembles
+      (concatenates) all chunk WAVs, post-processes to MP3, and uploads.
+    * **Transactional Checkpointing** -- ``_persist_course_audio_checkpoint``
+      writes completed session audio to Firestore inside a transaction so
+      that progress is durable.  If a worker crashes after 7/9 sessions,
+      the next run picks up at session 8.
+    * **Graceful Degradation** -- if a chunk WAV is missing during assembly
+      (worker died mid-synthesis), the assembly step regenerates it inline
+      rather than failing.
+
+Key Dependencies:
+    * ``factory_v2.shared.tts_converter`` -- text-to-speech engine
+    * ``factory_v2.shared.audio_processor`` -- WAV-to-MP3 encoding
+    * ``factory_v2.shared.storage_uploader`` -- Cloud Storage upload
+    * ``factory_v2.shared.course_tts_chunks`` -- chunk path helpers
+    * ``course_chunking`` -- session-to-chunk splitting
+    * ``course_common`` -- ``SESSION_DEFS`` and shared helpers
+
+Consumed By:
+    * ``course.py`` (re-export facade) -> ``registry.py``
+"""
 
 from __future__ import annotations
 
@@ -38,6 +69,11 @@ def _course_tts_job_data(
     job_data: dict[str, Any],
     session_code: str,
 ) -> dict[str, Any]:
+    """Build the TTS job metadata dict for one course session.
+
+    Injects the factory content-job ID and session code so the TTS engine
+    and storage uploader can tag assets with the correct provenance.
+    """
     content_job_id = _content_job_id(ctx.job)
     if not content_job_id:
         return dict(job_data)
@@ -70,11 +106,17 @@ def _persist_course_audio_checkpoint(
 
     @fs.transactional
     def _tx_patch_factory(tx) -> None:
+        """Merge new audio results into the factory_jobs document transactionally.
+
+        The run-ID guard prevents a stale worker from overwriting results
+        that belong to a newer run that has already claimed the job.
+        """
         nonlocal merged_audio_results, completed, progress
         snapshot = factory_ref.get(transaction=tx)
         if not snapshot.exists:
             return
         data = snapshot.to_dict() or {}
+        # Stale-run guard: skip the write if a newer run has taken over.
         active_run_id = str(data.get("current_run_id") or "").strip()
         if active_run_id and active_run_id != ctx.run_id:
             return
@@ -144,6 +186,11 @@ def _persist_course_audio_checkpoint(
 
 
 def _stash_generated_wav(tmp_wav_path: str, output_path: str) -> None:
+    """Move a TTS-generated WAV from its temp dir to the chunk output path.
+
+    Also cleans up the temp directory the TTS engine created, since each
+    call to ``convert_to_audio`` writes into a fresh temp folder.
+    """
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     shutil.move(tmp_wav_path, output_path)
     shutil.rmtree(os.path.dirname(tmp_wav_path), ignore_errors=True)
@@ -257,7 +304,17 @@ def _assemble_course_session_audio(
 
 
 def execute_synthesize_course_audio(ctx: StepContext) -> StepResult:
-    """Synthesize either one session shard or the full course, depending on `ctx.shard_key`."""
+    """Synthesize either one session shard or the full course, depending on ``ctx.shard_key``.
+
+    Two execution modes:
+        * **Shard mode** (``shard_key != "root"``) -- this is the fan-in
+          path.  The shard key identifies one session (e.g. ``"M2P"``).
+          All chunk WAVs for that session are assembled, post-processed,
+          and uploaded.
+        * **Root mode** (``shard_key == "root"``) -- fallback linear path
+          that synthesizes every session sequentially in a single worker.
+          Used when fan-out chunking is disabled or for legacy jobs.
+    """
     job_data = _content_job_data(ctx.job)
     runtime = _runtime(ctx.job)
 
@@ -268,6 +325,7 @@ def execute_synthesize_course_audio(ctx: StepContext) -> StepResult:
     if not formatted_scripts:
         raise ValueError("Missing runtime.course_formatted_scripts")
 
+    # Load any audio results already persisted by earlier shards/runs.
     audio_results: dict[str, dict[str, Any]] = dict(
         runtime.get("course_audio_results") or job_data.get("courseAudioResults") or {}
     )
@@ -337,7 +395,16 @@ def execute_synthesize_course_audio(ctx: StepContext) -> StepResult:
 
 
 def execute_synthesize_course_audio_chunk(ctx: StepContext) -> StepResult:
-    """Synthesize exactly one chunk for one course session shard."""
+    """Synthesize exactly one chunk for one course session shard.
+
+    This is the most granular fan-out unit in the course TTS pipeline.
+    The shard key encodes both the session (e.g. ``"M2P"``) and chunk
+    index (e.g. ``"M2P:2"``).  The step produces a single WAV file that
+    the session-level assembly step later concatenates.
+
+    Idempotency:
+        If the chunk WAV already exists on disk, the TTS call is skipped.
+    """
     from factory_v2.shared.tts_converter import convert_to_audio
 
     job_data = _content_job_data(ctx.job)
