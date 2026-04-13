@@ -360,13 +360,11 @@ def execute_assemble_audio(ctx: StepContext) -> StepResult:
     collects every chunk WAV produced by the parallel shard jobs, stitches
     them into one contiguous WAV, encodes it to MP3, and uploads the result.
 
-    Error Recovery:
-        If any chunk WAV is missing (e.g. a shard worker crashed before
-        writing to disk), the assembly step regenerates it inline rather
-        than failing the entire pipeline.  This "best-effort repair" trades
-        a bit of extra latency for significantly higher reliability.
+    If any chunk WAV is missing, the step fails with a clear error so the
+    orchestrator can retry the missing chunk on the correct TTS worker.
+    Assembly should never attempt TTS itself — it may run on a worker
+    without the required TTS model installed.
     """
-    from factory_v2.shared.tts_converter import convert_to_audio
     from factory_v2.shared.audio_processor import post_process_audio
     from factory_v2.shared.storage_uploader import upload_audio
     from factory_v2.shared.course_tts_chunks import (
@@ -388,16 +386,20 @@ def execute_assemble_audio(ctx: StepContext) -> StepResult:
     # what order they should be concatenated.
     chunks = split_course_tts_chunks(script)
     wav_paths: list[str] = []
+    missing: list[int] = []
 
-    for i, chunk_text in enumerate(chunks):
+    for i in range(len(chunks)):
         chunk_path = single_chunk_wav_path(ctx.run_id, i)
         if not chunk_path.is_file():
-            # Resilience: regenerate missing chunk inline instead of failing.
-            tmp_wav = convert_to_audio(chunk_text, job_data)
-            chunk_path.parent.mkdir(parents=True, exist_ok=True)
-            import shutil
-            shutil.move(str(tmp_wav), str(chunk_path))
+            missing.append(i)
         wav_paths.append(str(chunk_path))
+
+    if missing:
+        raise ValueError(
+            f"Cannot assemble audio: {len(missing)} chunk WAV(s) missing "
+            f"(indexes {missing}). Retry the job so TTS chunks are regenerated "
+            f"on a worker with the correct TTS model."
+        )
 
     # Concatenate all chunks into one contiguous WAV, then encode to MP3.
     assembled_path = str(single_assembled_wav_path(ctx.run_id))
