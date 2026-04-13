@@ -1676,6 +1676,15 @@ export async function requestContentThumbnailGeneration(job: ContentJob): Promis
   });
 }
 
+// ==================== UPDATE TITLE ====================
+
+export async function updateJobTitle(jobId: string, title: string): Promise<void> {
+  await updateDoc(doc(jobsCollection, jobId), {
+    generatedTitle: title.trim(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
 const COLLECTION_TO_CONTENT_TYPE: Record<string, FactoryContentType> = {
   guided_meditations: 'guided_meditation',
   sleep_meditations: 'sleep_meditation',

@@ -224,17 +224,32 @@ def _fallback_title(job_data: dict) -> str:
     return topic.strip().title()
 
 
+def _clean_title(raw: str) -> str:
+    """Sanitize a raw LLM title output, stripping special tokens and artifacts."""
+    import re
+    cleaned = re.sub(r"<\|[^>]*\|>", "", raw)   # e.g. <|channel|>, <|end|>
+    cleaned = re.sub(r"<[^>]+>", "", cleaned)    # any remaining XML-like tags
+    cleaned = cleaned.strip("\"'""''").strip(".").strip()
+    # Take only the first line — reject multi-line responses.
+    cleaned = cleaned.split("\n")[0].strip()
+    return cleaned
+
+
+def _is_valid_title(title: str) -> bool:
+    """Check whether a cleaned title is usable."""
+    return bool(title) and 3 <= len(title) <= 80
+
+
 def generate_title(job_data: dict, script: str) -> str:
     """Generate a short, creative title for the content using the LLM.
 
     Called when the admin did not provide an explicit title.  The LLM reads
-    the already-generated script and produces a concise title that captures
-    its essence -- rather than falling back to the raw topic/style string.
+    a summary of the generated script and produces a concise title that
+    captures its essence.
 
-    A brief cooldown is inserted before the LLM call to let local inference
-    servers (LM Studio / Ollama) fully release resources from the preceding
-    script-generation request.  Without this, LM Studio can crash with a
-    ``Channel Error`` on back-to-back inference.
+    Retries up to 2 times on invalid output before falling back to a
+    params-derived title.  A brief cooldown is inserted before each LLM
+    call to let local inference servers fully release resources.
 
     Args:
         job_data: The Firestore job document (used to load the LLM adapter
@@ -250,32 +265,39 @@ def generate_title(job_data: dict, script: str) -> str:
     content_type = job_data.get("contentType", "guided_meditation")
     type_label = _CONTENT_TYPE_LABELS.get(content_type, "meditation")
 
-    # Use up to the first 300 words of the script as context -- enough
-    # for the LLM to grasp the theme while keeping the prompt small.
-    script_preview = " ".join(script.split()[:300])
-
     prompt = (
         f"You are naming a {type_label} audio track for a wellness app.\n\n"
-        f"Here is the script:\n\n{script_preview}\n\n"
+        f"Here is the script:\n\n{script}\n\n"
         "Write a short, evocative title for this content (2-6 words). "
         "The title should feel calming and inviting. "
         "Reply with ONLY the title — no quotes, no punctuation, no explanation."
     )
 
-    # Cooldown: let LM Studio fully release the previous inference context
-    # before sending the next request.
-    time.sleep(2)
+    max_attempts = 2
+    for attempt in range(max_attempts):
+        # Cooldown: let LM Studio fully release the previous inference context.
+        time.sleep(2)
 
-    raw_title = adapter.generate(prompt, max_tokens=30).strip()
+        try:
+            raw_title = adapter.generate(prompt, max_tokens=30).strip()
+            cleaned = _clean_title(raw_title)
 
-    # Strip common LLM artifacts: surrounding quotes, trailing periods.
-    raw_title = raw_title.strip("\"'""''").strip(".").strip()
+            if _is_valid_title(cleaned):
+                logger.info("LLM title generated", extra={
+                    "title": cleaned, "attempt": attempt + 1,
+                })
+                return cleaned
 
-    # Fallback: if the LLM returned nothing usable, derive from params.
-    if not raw_title or len(raw_title) > 80:
-        raw_title = _fallback_title(job_data)
-        logger.warning("LLM returned unusable title, using fallback", extra={"fallback": raw_title})
-    else:
-        logger.info("LLM title generated", extra={"title": raw_title})
+            logger.warning("LLM title unusable, retrying", extra={
+                "raw": raw_title, "cleaned": cleaned, "attempt": attempt + 1,
+            })
+        except Exception as exc:
+            logger.warning("LLM title call failed, retrying", extra={
+                "error": str(exc), "attempt": attempt + 1,
+            })
 
-    return raw_title
+    fallback = _fallback_title(job_data)
+    logger.warning("Title generation failed after retries, using fallback", extra={
+        "fallback": fallback,
+    })
+    return fallback

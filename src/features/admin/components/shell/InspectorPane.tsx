@@ -107,6 +107,7 @@ function InspectorJobDetail({ jobId }: { jobId: string }) {
       onResumeSubject={state.handleResumeSubject}
       onDelete={state.handleDelete}
       onReview={state.handleReview}
+      onUpdateTitle={state.handleUpdateTitle}
     />
   );
 }

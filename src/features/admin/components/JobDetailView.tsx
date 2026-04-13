@@ -77,6 +77,7 @@ import {
   BACKEND_LABELS,
   CONTENT_TYPE_LABELS,
   CourseRegenerationMode,
+  FactoryContentType,
   FactoryJob,
   FactoryJobRun,
   JobExecutionRunState,
@@ -96,6 +97,7 @@ import { Theme } from '@/theme';
 
 type Props = {
   job: ContentJob;
+  onUpdateTitle?: (title: string) => Promise<void>;
   factoryJob?: FactoryJob | null;
   factoryRun?: FactoryJobRun | null;
   executionView?: JobExecutionView | null;
@@ -157,8 +159,21 @@ const SECTION_IDS = [
   'thumbnail',
   'courseRegeneration',
   'output',
+  'singleScript',
   'courseScripts',
 ];
+
+// Content types whose LLM-generated scripts live in job.formattedScript (a
+// single string, as opposed to courses which store a per-session dict in
+// job.courseFormattedScripts).  Gating the Script section on this set keeps
+// audio-only types like album/sleep_sound/asmr from accidentally rendering an
+// empty panel when future fields are added.
+const SINGLE_SCRIPT_CONTENT_TYPES: ReadonlySet<FactoryContentType> = new Set<FactoryContentType>([
+  'guided_meditation',
+  'sleep_meditation',
+  'bedtime_story',
+  'emergency_meditation',
+]);
 
 export function JobDetailView({
   job,
@@ -1797,7 +1812,10 @@ function buildSections(params: {
       content: (
         <>
           {(job.generatedTitle || job.title) && (
-            <InfoRow label="Title" value={job.generatedTitle || job.title || ''} />
+            <EditableTitleRow
+              value={job.generatedTitle || job.title || ''}
+              onSave={props.onUpdateTitle}
+            />
           )}
           <InfoRow
             label="LLM Backend"
@@ -2474,6 +2492,34 @@ function buildSections(params: {
       ),
     },
     {
+      // Mirrors the "Course Scripts" section below, but for single-content
+      // jobs (guided/sleep/bedtime/emergency).  Those jobs store their LLM
+      // output in job.formattedScript as a single string — no session picker
+      // is needed, so the render model is just a ScrollView.  shouldRender
+      // hides the section entirely when the field is missing (e.g. job
+      // failed before format_script ran) instead of showing an empty panel.
+      id: 'singleScript',
+      title: 'Script',
+      summaryItems: toSummaryItems([
+        {
+          label: 'Length',
+          value: job.formattedScript
+            ? `${job.formattedScript.length.toLocaleString()} chars`
+            : undefined,
+        },
+      ]),
+      shouldRender:
+        SINGLE_SCRIPT_CONTENT_TYPES.has(job.contentType) &&
+        Boolean(job.formattedScript && job.formattedScript.trim()),
+      content: (
+        <View style={styles.scrollBox}>
+          <ScrollView nestedScrollEnabled>
+            <Text style={styles.scriptText}>{job.formattedScript}</Text>
+          </ScrollView>
+        </View>
+      ),
+    },
+    {
       id: 'courseScripts',
       title: 'Course Scripts',
       summaryItems: toSummaryItems([
@@ -3009,6 +3055,115 @@ function InfoRow({ label, value }: { label: string; value: string }) {
       >
         {getDisplayValue(value)}
       </Text>
+    </View>
+  );
+}
+
+function EditableTitleRow({
+  value,
+  onSave,
+}: {
+  value: string;
+  onSave?: (title: string) => Promise<void>;
+}) {
+  const { theme } = useTheme();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  const handleSave = async () => {
+    const trimmed = draft.trim();
+    if (!trimmed || trimmed === value || !onSave) {
+      setEditing(false);
+      setDraft(value);
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave(trimmed);
+      setEditing(false);
+    } catch {
+      Alert.alert('Error', 'Failed to update title.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 8 }}>
+      <Text
+        style={{
+          fontFamily: 'DMSans-Medium',
+          fontSize: 14,
+          color: theme.colors.textMuted,
+          width: 120,
+          paddingRight: 12,
+        }}
+      >
+        Title
+      </Text>
+      {editing ? (
+        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <TextInput
+            style={{
+              flex: 1,
+              fontFamily: 'DMSans-Regular',
+              fontSize: 14,
+              color: theme.colors.text,
+              backgroundColor: theme.colors.surface,
+              borderRadius: 8,
+              paddingHorizontal: 10,
+              paddingVertical: 6,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+            }}
+            value={draft}
+            onChangeText={setDraft}
+            autoFocus
+            onSubmitEditing={handleSave}
+            editable={!saving}
+          />
+          <Pressable onPress={handleSave} disabled={saving}>
+            <Ionicons
+              name={saving ? 'hourglass-outline' : 'checkmark-circle'}
+              size={20}
+              color={theme.colors.primary}
+            />
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              setDraft(value);
+              setEditing(false);
+            }}
+            disabled={saving}
+          >
+            <Ionicons name="close-circle" size={20} color={theme.colors.textMuted} />
+          </Pressable>
+        </View>
+      ) : (
+        <Pressable
+          style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 }}
+          onPress={() => onSave && setEditing(true)}
+        >
+          <Text
+            style={{
+              fontFamily: 'DMSans-Regular',
+              fontSize: 14,
+              color: theme.colors.text,
+              flex: 1,
+            }}
+          >
+            {value}
+          </Text>
+          {onSave && (
+            <Ionicons name="pencil-outline" size={14} color={theme.colors.textMuted} />
+          )}
+        </Pressable>
+      )}
     </View>
   );
 }

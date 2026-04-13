@@ -39,7 +39,7 @@ import {
   useJobDetail,
   useJobStepTimeline,
 } from './useJobQueue';
-import { publishCompletedJob } from '../data/adminRepository';
+import { publishCompletedJob, updateJobTitle } from '../data/adminRepository';
 import { CourseRegenerationMode } from '../types';
 
 /**
@@ -313,6 +313,11 @@ export function useJobDetailActions(jobId: string | undefined) {
     router.push({ pathname: '/admin/job/[id]/review', params: { id: job.id } });
   }, [job, router]);
 
+  const handleUpdateTitle = useCallback(async (title: string) => {
+    if (!job) return;
+    await updateJobTitle(job.id, title);
+  }, [job]);
+
   // Derived flags (same logic as app/admin/job/[id].tsx).
   const isCourseRegenAwaitingPublish =
     job?.contentType === 'course' &&
@@ -394,5 +399,6 @@ export function useJobDetailActions(jobId: string | undefined) {
     handlePauseSubject,
     handleResumeSubject,
     handleReview,
+    handleUpdateTitle,
   };
 }

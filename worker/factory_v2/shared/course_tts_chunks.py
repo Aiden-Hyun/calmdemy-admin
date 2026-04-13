@@ -253,9 +253,22 @@ def parse_single_chunk_shard_key(shard_key: str) -> int | None:
     return max(0, int(match.group(1)) - 1)
 
 
+def _job_id_from_run_id(run_id: str) -> str:
+    """Extract the stable job ID from a run ID (e.g. 'abc123-r2' -> 'abc123').
+
+    Chunk WAVs are keyed by job ID so they survive across retries.
+    """
+    parts = str(run_id).rsplit("-r", 1)
+    return parts[0] if len(parts) == 2 and parts[1].isdigit() else str(run_id)
+
+
 def single_content_temp_dir(run_id: str) -> Path:
-    """Return (and create) the temp directory for single-content TTS chunks."""
-    root = Path(tempfile.gettempdir()) / "calmdemy_single_tts" / str(run_id).strip()
+    """Return (and create) the temp directory for single-content TTS chunks.
+
+    Keyed by job ID (not run ID) so chunk WAVs persist across retries.
+    """
+    job_id = _job_id_from_run_id(run_id)
+    root = Path(tempfile.gettempdir()) / "calmdemy_single_tts" / job_id.strip()
     root.mkdir(parents=True, exist_ok=True)
     return root
 

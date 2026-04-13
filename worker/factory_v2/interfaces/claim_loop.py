@@ -497,11 +497,14 @@ class ClaimLoop:
                 delay_seconds = max(1, int(result.requeue_after_seconds))
                 self.job_repo.patch_runtime(job_id, result.runtime_patch)
                 self.job_repo.patch_summary(job_id, result.summary_patch)
-                self.job_repo.patch_compat_content_job_for_run(
-                    content_job_id,
-                    run_id,
-                    result.compat_content_job_patch,
-                )
+                try:
+                    self.job_repo.patch_compat_content_job_for_run(
+                        content_job_id,
+                        run_id,
+                        result.compat_content_job_patch,
+                    )
+                except Exception:
+                    pass  # Compat patch is best-effort
                 self.step_run_repo.mark_waiting(step_run_id, delay_seconds)
                 self.queue_repo.schedule_continuation(queue_id, delay_seconds)
                 self.event_repo.emit(
@@ -533,11 +536,22 @@ class ClaimLoop:
 
             self.job_repo.patch_runtime(job_id, result.runtime_patch)
             self.job_repo.patch_summary(job_id, result.summary_patch)
-            self.job_repo.patch_compat_content_job_for_run(
-                content_job_id,
-                run_id,
-                result.compat_content_job_patch,
-            )
+            try:
+                self.job_repo.patch_compat_content_job_for_run(
+                    content_job_id,
+                    run_id,
+                    result.compat_content_job_patch,
+                )
+            except Exception as compat_exc:
+                logger.warning(
+                    "Compat content_job patch failed (non-fatal)",
+                    extra=self._step_log_fields(
+                        payload,
+                        queue_id=queue_id,
+                        attempt=attempt,
+                        extra={"error": str(compat_exc)},
+                    ),
+                )
             updated_job = self.job_repo.get(job_id)
             self._patch_course_tts_progress(
                 job_id=job_id,
@@ -568,11 +582,14 @@ class ClaimLoop:
                     },
                 )
             active_run_elapsed_ms = compute_live_run_elapsed_ms(self.db, job_id, run_id)
-            self.job_repo.patch_compat_content_job_for_run(
-                content_job_id,
-                run_id,
-                {"activeRunElapsedMs": active_run_elapsed_ms},
-            )
+            try:
+                self.job_repo.patch_compat_content_job_for_run(
+                    content_job_id,
+                    run_id,
+                    {"activeRunElapsedMs": active_run_elapsed_ms},
+                )
+            except Exception:
+                pass  # Elapsed-time compat patch is best-effort
             self.orchestrator.on_step_success(job_id, run_id, step_name, shard_key=shard_key)
             return True
 
