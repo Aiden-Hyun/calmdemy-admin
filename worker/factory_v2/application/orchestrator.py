@@ -359,6 +359,104 @@ class Orchestrator:
         state = str(summary.get("subjectState") or "").strip().lower()
         return state or "watching"
 
+    # ------------------------------------------------------------------
+    # Single-content smart retry: detect completed steps and skip ahead
+    # ------------------------------------------------------------------
+
+    _SINGLE_CONTENT_RESUME_AFTER_IMAGE = "_resume_after_image"
+
+    def _determine_single_content_first_step(self, job: dict) -> str | None:
+        """Inspect runtime artifacts to find the first incomplete step.
+
+        Returns a step name to resume from, the special sentinel
+        ``_resume_after_image`` (image done, audio not), or ``None``
+        when the job should start from the beginning.
+        """
+        if job.get("job_type") not in (None, "single_content"):
+            return None
+
+        runtime = dict(job.get("runtime") or {})
+
+        # Walk the pipeline in reverse: find the latest completed step,
+        # then return the *next* step after it.
+        if str(runtime.get("published_content_id") or "").strip():
+            return "publish_content"  # re-publish
+        if str(runtime.get("storage_path") or "").strip():
+            return "publish_content"  # audio done, publish failed
+        if (
+            str(runtime.get("thumbnail_url") or "").strip()
+            and not self._single_thumbnail_generation_requested(job)
+        ):
+            return self._SINGLE_CONTENT_RESUME_AFTER_IMAGE
+        if str(runtime.get("formatted_script") or "").strip():
+            return "generate_image"
+        if str(runtime.get("generated_script") or "").strip():
+            return "format_script"
+        return None
+
+    def _seed_single_content_checkpoint_steps(
+        self,
+        job: dict,
+        job_id: str,
+        run_id: str,
+        first_step: str,
+    ) -> None:
+        """Mark completed single-content steps as checkpoints for this run.
+
+        Mirrors ``_seed_course_checkpoint_steps`` but for the single-content
+        pipeline.  Each prior step whose runtime artifact exists is marked
+        ``succeeded_from_checkpoint`` so the admin timeline shows them as
+        reused and prerequisite gates pass.
+        """
+        if job.get("job_type") not in (None, "single_content"):
+            return
+
+        runtime = dict(job.get("runtime") or {})
+
+        # Steps before the resume point, in pipeline order.
+        checkpointable = {
+            "generate_script": bool(str(runtime.get("generated_script") or "").strip()),
+            "format_script": bool(str(runtime.get("formatted_script") or "").strip()),
+            "generate_image": bool(
+                str(runtime.get("thumbnail_url") or "").strip()
+                and not self._single_thumbnail_generation_requested(job)
+            ),
+        }
+
+        # The pipeline order up to the image step.  Steps after image
+        # (audio, publish) are handled by the orchestrator dynamically.
+        pipeline_order = ["generate_script", "format_script", "generate_image"]
+
+        for step_name in pipeline_order:
+            # Stop seeding once we reach the step we're about to execute.
+            if step_name == first_step:
+                break
+            # Also stop for the resume-after-image sentinel.
+            if first_step == self._SINGLE_CONTENT_RESUME_AFTER_IMAGE and step_name == "generate_image":
+                # Still seed generate_image itself since it completed.
+                pass  # fall through to checkpoint it below
+            if not checkpointable.get(step_name):
+                continue
+            step_run_id = self.step_run_repo.ensure_ready(job_id, run_id, step_name)
+            self.step_run_repo.mark_succeeded_from_checkpoint(
+                step_run_id,
+                {"reused_from_checkpoint": True},
+            )
+
+        # For _resume_after_image, also checkpoint generate_image itself.
+        if (
+            first_step == self._SINGLE_CONTENT_RESUME_AFTER_IMAGE
+            and checkpointable.get("generate_image")
+        ):
+            step_run_id = self.step_run_repo.ensure_ready(job_id, run_id, "generate_image")
+            self.step_run_repo.mark_succeeded_from_checkpoint(
+                step_run_id,
+                {
+                    "reused_from_checkpoint": True,
+                    "thumbnail_url": str(runtime.get("thumbnail_url") or ""),
+                },
+            )
+
     def _seed_course_checkpoint_steps(
         self,
         job: dict,
@@ -637,13 +735,29 @@ class Orchestrator:
         # Mark the parent job as running with this run.
         self.job_repo.mark_running(job_id, run_id)
 
+        # Smart retry: if no explicit first_step was given, auto-detect
+        # the earliest incomplete step based on runtime artifacts.
+        if first_step is None and job.get("job_type") in (None, "single_content"):
+            first_step = self._determine_single_content_first_step(job)
+
         # Look up the static DAG and determine the first step.
         workflow = workflow_for_job_type(job["job_type"])
+
+        # Handle the "resume after image" sentinel: image is done but
+        # audio isn't.  Seed checkpoints through generate_image, then
+        # kick off audio fan-out directly (since the audio path choice
+        # is a runtime decision, not a static DAG edge).
+        if first_step == self._SINGLE_CONTENT_RESUME_AFTER_IMAGE:
+            self._seed_single_content_checkpoint_steps(job, job_id, run_id, first_step)
+            self._fan_out_single_audio(job, job_id, run_id)
+            return run_id
+
         first = first_step or workflow.steps[0]
 
-        # For mid-pipeline starts (e.g. publish-only), seed earlier steps
-        # as "completed from checkpoint" so prerequisite checks pass.
+        # For mid-pipeline starts, seed earlier steps as "completed from
+        # checkpoint" so prerequisite checks pass.
         self._seed_course_checkpoint_steps(job, job_id, run_id, first)
+        self._seed_single_content_checkpoint_steps(job, job_id, run_id, first)
         # Enqueue the first work item -- the pipeline is now in motion.
         self._ensure_step_enqueued(job, job_id, run_id, first)
         return run_id
