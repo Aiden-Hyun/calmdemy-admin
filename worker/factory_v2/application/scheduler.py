@@ -102,8 +102,9 @@ class WorkflowSpec:
 
 SINGLE_CONTENT_WORKFLOW = WorkflowSpec(
     name="single_content",
-    # The steps list is the *linear* happy-path a human would read:
-    #   script -> format -> image + audio (parallel) -> publish
+    # Pipeline: script -> format -> image -> audio -> publish
+    # Image generation runs AFTER scripts complete (not in parallel with audio)
+    # to avoid overloading local inference servers with back-to-back AI calls.
     steps=[
         "generate_script",
         "format_script",
@@ -117,33 +118,27 @@ SINGLE_CONTENT_WORKFLOW = WorkflowSpec(
     ],
     edges={
         "generate_script": ["format_script"],
-        # NOTE: format_script has NO static successor here.  The orchestrator
-        # dynamically decides between two audio paths at runtime:
-        #   - Chunked path:  synthesize_audio_chunk -> assemble_audio
-        #   - Linear path:   synthesize_audio -> post_process_audio -> upload_audio
-        # generate_image is also enqueued in parallel by the orchestrator.
-        "generate_image": ["publish_content"],
+        # format_script -> generate_image is handled by the orchestrator.
+        # generate_image -> audio fan-out is also orchestrator-managed
+        # (chooses chunked vs linear path at runtime).
         "synthesize_audio": ["post_process_audio"],
         "post_process_audio": ["upload_audio"],
         "upload_audio": ["publish_content"],
-        # assemble_audio -> publish_content is handled by custom orchestrator
-        # logic (not a static edge) to avoid prerequisite conflicts with the
-        # upload_audio fallback path.  Both paths converge on publish_content,
-        # but only one will be active per run.
+        # assemble_audio -> publish_content is handled by the orchestrator.
     },
     terminal_step="publish_content",
 )
 
 COURSE_WORKFLOW = WorkflowSpec(
     name="course",
-    # Courses follow a longer linear spine.  Audio synthesis fans out into
-    # per-session shards (managed by the orchestrator, not static edges).
-    # Thumbnail generation runs in parallel, also orchestrator-managed.
+    # Pipeline: plan -> scripts -> format -> thumbnail -> audio -> publish
+    # Thumbnail runs AFTER scripts are formatted (not in parallel) to avoid
+    # overloading local AI servers.  Audio fan-out is orchestrator-managed.
     steps=[
         "generate_course_plan",
-        "generate_course_thumbnail",
         "generate_course_scripts",
         "format_course_scripts",
+        "generate_course_thumbnail",
         "synthesize_course_audio",
         "upload_course_audio",
         "publish_course",
@@ -151,7 +146,8 @@ COURSE_WORKFLOW = WorkflowSpec(
     edges={
         "generate_course_plan": ["generate_course_scripts"],
         "generate_course_scripts": ["format_course_scripts"],
-        "format_course_scripts": ["synthesize_course_audio"],
+        # format_course_scripts -> generate_course_thumbnail (or audio)
+        # is handled by the orchestrator dynamically.
         "synthesize_course_audio": ["upload_course_audio"],
         "upload_course_audio": ["publish_course"],
     },

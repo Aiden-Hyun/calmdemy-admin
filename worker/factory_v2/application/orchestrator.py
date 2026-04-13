@@ -1045,22 +1045,8 @@ class Orchestrator:
             self._complete_course_publish_run(job, job_id, run_id)
             return True
 
-        requires_thumbnail = (
-            self._course_generates_thumbnail_during_run(job)
-            or self._course_thumbnail_generation_requested(job)
-        )
-        thumbnail_requested = self._course_thumbnail_generation_requested(job)
-        thumbnail_succeeded = self.step_run_repo.has_succeeded(
-            job_id,
-            run_id,
-            "generate_course_thumbnail",
-        )
-        if requires_thumbnail and not thumbnail_succeeded:
-            if thumbnail_requested:
-                return False
-            if not self._course_thumbnail_url(job):
-                return False
-
+        # Thumbnail now runs before audio in the sequential pipeline, so if
+        # audio upload succeeded, thumbnail is already done (or was skipped).
         self._ensure_step_enqueued(job, job_id, run_id, "publish_course")
         return True
 
@@ -1158,31 +1144,11 @@ class Orchestrator:
                 return
 
         # ---- Course jobs -------------------------------------------------
-        # Course runs have two extra orchestration concerns beyond the
-        # linear DAG:
-        #   1. Thumbnail generation runs in parallel with the audio spine
-        #      and can be reused from a prior run (checkpoint).
-        #   2. Audio synthesis fans out into chunk shards per session,
-        #      then fans back in (two-level fan-out / fan-in).
+        # Course pipeline: plan -> scripts -> format -> thumbnail -> audio -> publish
+        # Thumbnail generation runs AFTER all scripts are formatted (not in
+        # parallel) to avoid overloading local AI servers.  Audio synthesis
+        # starts after the thumbnail step finishes.
         if job["job_type"] == "course":
-            # After plan generation, optionally kick off thumbnail in
-            # parallel with the main script-generation spine.
-            if step_name == "generate_course_plan" and self._course_generates_thumbnail_during_run(job):
-                self._ensure_step_enqueued(job, job_id, run_id, "generate_course_thumbnail")
-            if step_name == "generate_course_thumbnail":
-                # If audio upload already finished (thumbnail was the slow
-                # path), we can go straight to publish.
-                if self.step_run_repo.has_succeeded(job_id, run_id, "upload_course_audio"):
-                    self._ensure_step_enqueued(job, job_id, run_id, "publish_course")
-                    return
-                # Thumbnail-only run: update the published doc and finish.
-                if self._course_thumbnail_generation_requested(job):
-                    self._update_published_course_thumbnail(job, run_id)
-                    self.job_repo.mark_completed(job_id, run_id)
-                    self.run_repo.mark_completed(run_id)
-                    return
-                # Audio still in progress -- wait for upload_course_audio.
-                return
             if step_name == "generate_course_scripts":
                 # Script-approval gate: if an admin review is required,
                 # end the run here.  A new run will be started after
@@ -1196,7 +1162,24 @@ class Orchestrator:
                     self._finalize_completed_job(job_id, run_id)
                     return
             if step_name == "format_course_scripts":
-                # Trigger the two-level fan-out for audio synthesis.
+                # After scripts are formatted, run thumbnail generation
+                # if configured; otherwise go straight to audio.
+                if (
+                    self._course_generates_thumbnail_during_run(job)
+                    and not self._course_thumbnail_url(job)
+                ):
+                    self._ensure_step_enqueued(job, job_id, run_id, "generate_course_thumbnail")
+                else:
+                    self._fan_out_course_audio(job, job_id, run_id)
+                return
+            if step_name == "generate_course_thumbnail":
+                # Thumbnail-only run shortcut: update and finish.
+                if self._course_thumbnail_generation_requested(job):
+                    self._update_published_course_thumbnail(job, run_id)
+                    self.job_repo.mark_completed(job_id, run_id)
+                    self.run_repo.mark_completed(run_id)
+                    return
+                # Thumbnail done -- now start audio synthesis.
                 self._fan_out_course_audio(job, job_id, run_id)
                 return
             if step_name == COURSE_AUDIO_CHUNK_STEP:
@@ -1219,23 +1202,7 @@ class Orchestrator:
                 self._maybe_fan_in_course_audio(job, job_id, run_id)
                 return
             if step_name == "upload_course_audio":
-                # Gate publish on thumbnail completion if one is required.
-                requires_thumbnail = (
-                    self._course_generates_thumbnail_during_run(job)
-                    or self._course_thumbnail_generation_requested(job)
-                )
-                thumbnail_requested = self._course_thumbnail_generation_requested(job)
-                thumbnail_succeeded = self.step_run_repo.has_succeeded(
-                    job_id,
-                    run_id,
-                    "generate_course_thumbnail",
-                )
-                if requires_thumbnail and not thumbnail_succeeded:
-                    # Thumbnail still in progress -- wait for it.
-                    if thumbnail_requested:
-                        return
-                    if not self._course_thumbnail_url(job):
-                        return
+                # Audio done -- proceed to publish.
                 self._ensure_step_enqueued(job, job_id, run_id, "publish_course")
                 return
             if step_name == "publish_course":
@@ -1248,32 +1215,17 @@ class Orchestrator:
             self._finalize_completed_job(job_id, run_id)
             return
 
-        # ---- Single-content fan-out / fan-in --------------------------------
-        # After format_script, two parallel branches start:
-        #   Branch A: audio (chunked or linear)
-        #   Branch B: image generation
-        # publish_content is gated on BOTH branches completing.
+        # ---- Single-content sequential pipeline --------------------------------
+        # After format_script, image generation runs first (uses the LLM /
+        # image-AI while the GPU is free), then audio synthesis starts after
+        # the image step finishes.  This avoids back-to-back AI calls that
+        # crash local inference servers (LM Studio Channel Error).
+        #
+        # Pipeline: format_script -> generate_image -> audio -> publish_content
         if job["job_type"] == "single_content":
             if step_name == "format_script":
-                # Fan-out: choose chunked vs linear audio and kick off
-                # image generation in parallel.
-                self._fan_out_single_audio(job, job_id, run_id)
+                # Run image generation first; audio starts after it finishes.
                 self._ensure_step_enqueued(job, job_id, run_id, "generate_image")
-                return
-
-            if step_name == SINGLE_AUDIO_CHUNK_STEP:
-                # A chunk finished -- check if all chunks are done so we
-                # can assemble them into one audio file.
-                self._maybe_enqueue_single_audio_assembly(job, job_id, run_id)
-                return
-
-            if step_name == SINGLE_AUDIO_ASSEMBLE_STEP:
-                # Chunked audio assembled -- gate on image completion
-                # before moving to publish.
-                if self.step_run_repo.has_succeeded(job_id, run_id, "generate_image"):
-                    self._ensure_step_enqueued(job, job_id, run_id, "publish_content")
-                # else: image still running -- on_step_success for
-                # generate_image will enqueue publish when it finishes.
                 return
 
             if step_name == "generate_image":
@@ -1284,20 +1236,24 @@ class Orchestrator:
                     self.run_repo.mark_completed(run_id)
                     self._finalize_completed_job(job_id, run_id)
                     return
-                # Image done -- check both audio paths before publishing.
-                if self.step_run_repo.has_succeeded(job_id, run_id, SINGLE_AUDIO_ASSEMBLE_STEP):
-                    self._ensure_step_enqueued(job, job_id, run_id, "publish_content")
-                    return
-                if self.step_run_repo.has_succeeded(job_id, run_id, "upload_audio"):
-                    self._ensure_step_enqueued(job, job_id, run_id, "publish_content")
-                    return
-                # Image done but audio not yet -- wait for audio branch.
+                # Image done -- now start audio synthesis.
+                self._fan_out_single_audio(job, job_id, run_id)
+                return
+
+            if step_name == SINGLE_AUDIO_CHUNK_STEP:
+                # A chunk finished -- check if all chunks are done so we
+                # can assemble them into one audio file.
+                self._maybe_enqueue_single_audio_assembly(job, job_id, run_id)
+                return
+
+            if step_name == SINGLE_AUDIO_ASSEMBLE_STEP:
+                # Chunked audio assembled -- proceed to publish.
+                self._ensure_step_enqueued(job, job_id, run_id, "publish_content")
                 return
 
             if step_name == "upload_audio":
-                # Linear audio path: gate publish on image completion.
-                if self.step_run_repo.has_succeeded(job_id, run_id, "generate_image"):
-                    self._ensure_step_enqueued(job, job_id, run_id, "publish_content")
+                # Linear audio path done -- proceed to publish.
+                self._ensure_step_enqueued(job, job_id, run_id, "publish_content")
                 return
 
         if step_name == "generate_image" and self._single_thumbnail_generation_requested(job):
