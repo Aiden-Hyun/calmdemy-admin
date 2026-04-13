@@ -228,16 +228,22 @@ def start_worker(stack: dict) -> int:
     # without delay.
     env.setdefault("PYTHONUNBUFFERED", "1")
 
-    # process_group=0 lets CPython use posix_spawn instead of fork+exec,
-    # avoiding the "multi-threaded process forked" crash when gRPC threads
-    # are active.  Requires Python 3.11+.
+    # Spawn via shell to avoid the "multi-threaded process forked" crash.
+    # The companion process has gRPC background threads (from Firebase SDK).
+    # On Python 3.11, subprocess.Popen uses fork() which is unsafe in a
+    # multi-threaded process on macOS — the child crashes with SIGABRT.
+    # Using shell=True with 'exec' replaces the shell process with the
+    # worker, avoiding the fork-in-threaded-process issue.
+    cwd = os.path.join(BASE_DIR, "..")
+    shell_cmd = f"exec {python_exec} {worker_path}"
     process = subprocess.Popen(
-        [python_exec, worker_path],
-        cwd=os.path.join(BASE_DIR, ".."),
+        shell_cmd,
+        cwd=cwd,
         stdout=log_file,
         stderr=subprocess.STDOUT,
         env=env,
-        process_group=0,
+        shell=True,
+        start_new_session=True,
     )
     _write_pid(stack_id, process.pid)
     return process.pid
