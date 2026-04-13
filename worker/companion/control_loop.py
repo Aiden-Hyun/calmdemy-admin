@@ -50,12 +50,13 @@ Consumed By:
 import os
 import random
 import re
-import subprocess
 import sys
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
+
+import psutil
 
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -220,31 +221,31 @@ def _read_proc_meminfo_snapshot() -> Optional[dict]:
 
 def _system_memory_snapshot() -> Optional[dict]:
     """
-    Platform dispatcher: probe system memory using the OS-appropriate method.
-
-    macOS → ``memory_pressure -Q`` (fast, no root required).
-    Linux → ``/proc/meminfo`` (always available).
+    Probe system memory using psutil (cross-platform, no subprocess fork).
 
     Returns None if the guard is disabled or probing fails — callers
     interpret None as "skip memory-based decisions" (fail-open).
+
+    Uses psutil.virtual_memory() instead of shelling out to
+    ``memory_pressure`` or reading ``/proc/meminfo`` to avoid fork()
+    in a multi-threaded process (gRPC threads make fork unsafe on macOS).
     """
     if not COMPANION_MEMORY_GUARD_ENABLED:
         return None
 
-    if sys.platform == "darwin":
-        try:
-            result = subprocess.run(
-                ["memory_pressure", "-Q"],
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=COMPANION_MEMORY_PROBE_TIMEOUT_SEC,
-            )
-        except Exception:
-            return None
-        return _parse_memory_pressure_snapshot(result.stdout)
-
-    return _read_proc_meminfo_snapshot()
+    try:
+        vm = psutil.virtual_memory()
+        total_bytes = vm.total
+        available_bytes = vm.available
+        free_ratio = max(0.0, min(1.0, available_bytes / total_bytes)) if total_bytes else 0.0
+        return {
+            "source": "psutil",
+            "totalBytes": total_bytes,
+            "freeRatio": free_ratio,
+            "freeBytes": available_bytes,
+        }
+    except Exception:
+        return None
 
 
 def _available_memory_budget_mb(snapshot: Optional[dict]) -> Optional[int]:
@@ -793,6 +794,15 @@ def _pick_stack_ids(
     return additions
 
 
+def _measure_process_rss_mb(pid: int) -> Optional[int]:
+    """Return actual RSS of a process in MB, or None if unavailable."""
+    try:
+        proc = psutil.Process(pid)
+        return int(proc.memory_info().rss / (1024 * 1024))
+    except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
+        return None
+
+
 def _apply_memory_guard(
     enabled_stacks: list[dict],
     desired_ids: set[str],
@@ -803,18 +813,22 @@ def _apply_memory_guard(
     Pre-spawn gate: drop lowest-priority idle workers until the desired set
     fits in available memory.
 
-    Replaces the old _apply_qwen_memory_guard() which only governed Qwen
-    TTS workers.  This version is **stack-agnostic** — it uses each stack's
-    memoryPerWorkerMB to build a cost model, then greedily evicts the
-    cheapest-to-lose workers until total cost ≤ budget.
+    Uses **actual RSS** for running workers (measured via psutil) instead of
+    declared budgets, so the guard accurately reflects real memory usage.
+    Only cold (not-yet-spawned) workers are costed by their declared
+    memoryPerWorkerMB — since they haven't consumed any RAM yet.
+
+    The budget is the current free RAM minus OS reserve.  Running workers'
+    memory is already consumed (not part of free RAM), so only new spawns
+    are checked against the budget.
 
     Priority tiers (never violated):
       1. Active workers (currently leasing a job) — **never** evicted.
       2. Warm idle (process alive, no active job) — evicted second.
       3. Cold (not yet spawned) — evicted first, since no process to kill.
 
-    Within each tier, the largest-budget worker is evicted first so we
-    free the most memory per eviction (greedy knapsack heuristic).
+    Within each tier, the largest-cost worker is evicted first (greedy
+    knapsack heuristic).
 
     Returns the (possibly reduced) set of desired IDs and the memory
     snapshot used, so callers can log it or attach it to workload metadata.
@@ -822,42 +836,57 @@ def _apply_memory_guard(
     snapshot = _system_memory_snapshot()
     budget_mb = _available_memory_budget_mb(snapshot)
     if budget_mb is None:
-        # Memory probing unavailable — fail open and let all desired workers run.
         return desired_ids, snapshot
 
     stacks_by_id = {stack["id"]: stack for stack in enabled_stacks}
 
-    def _mem(stack_id: str) -> int:
-        """Look up the declared memory budget for a stack, defaulting to 3 GB."""
+    def _declared_mem(stack_id: str) -> int:
+        """Declared memory budget for a stack, defaulting to 3 GB."""
         stack = stacks_by_id.get(stack_id)
         return (stack.get("memoryPerWorkerMB") or 3000) if stack else 3000
 
-    # --- Fast path: everything fits, no eviction needed ---
-    total_desired_mb = sum(_mem(sid) for sid in desired_ids)
-    if total_desired_mb <= budget_mb:
+    def _cost(stack_id: str) -> int:
+        """Actual RSS for running workers, declared budget for cold ones."""
+        pid = running.get(stack_id)
+        if pid is not None:
+            rss = _measure_process_rss_mb(pid)
+            if rss is not None:
+                return rss
+        return _declared_mem(stack_id)
+
+    # Only cold workers (not yet spawned) need free RAM.  Running workers
+    # already consumed their memory — it's not part of the free budget.
+    cold_ids = {sid for sid in desired_ids if sid not in running}
+    new_spawn_cost_mb = sum(_declared_mem(sid) for sid in cold_ids)
+
+    # Fast path: new spawns fit in available budget.
+    if new_spawn_cost_mb <= budget_mb:
         return desired_ids, snapshot
 
     # --- Classify desired workers into priority tiers ---
     active_ids = {sid for sid in desired_ids if sid in active_owners}
     warm_ids = {sid for sid in desired_ids if sid not in active_owners and sid in running}
-    cold_ids = {sid for sid in desired_ids if sid not in active_owners and sid not in running}
 
-    # Build eviction order: cold first (cheapest to drop — no process to kill),
-    # then warm idle.  Within each tier, largest budget first (greedy: maximize
-    # freed memory per eviction step).
+    # Build eviction order: cold first (prevent spawn), then warm idle
+    # (kill to free RAM for higher-priority spawns).  Largest cost first.
     eviction_order = (
-        sorted(cold_ids, key=lambda sid: _mem(sid), reverse=True)
-        + sorted(warm_ids, key=lambda sid: _mem(sid), reverse=True)
+        sorted(cold_ids - active_ids, key=lambda sid: _cost(sid), reverse=True)
+        + sorted(warm_ids, key=lambda sid: _cost(sid), reverse=True)
     )
 
     # --- Greedy eviction loop ---
     remaining = set(desired_ids)
-    current_mb = total_desired_mb
+    current_new_cost = new_spawn_cost_mb
     for sid in eviction_order:
-        if current_mb <= budget_mb:
+        if current_new_cost <= budget_mb:
             break
         remaining.discard(sid)
-        current_mb -= _mem(sid)
+        if sid in cold_ids:
+            # Dropping a cold worker reduces the spawn cost directly.
+            current_new_cost -= _declared_mem(sid)
+        else:
+            # Stopping a warm worker frees its actual RSS, adding to budget.
+            budget_mb += _cost(sid)
 
     if remaining != desired_ids:
         logger.info(
@@ -865,8 +894,7 @@ def _apply_memory_guard(
             extra={
                 "free_ratio": snapshot.get("freeRatio") if snapshot else None,
                 "budget_mb": budget_mb,
-                "desired_mb": total_desired_mb,
-                "fitted_mb": current_mb,
+                "new_spawn_cost_mb": new_spawn_cost_mb,
                 "evicted": sorted(desired_ids - remaining),
                 "kept": sorted(remaining),
             },
@@ -927,14 +955,18 @@ def _check_memory_pressure(
         )
         return set()
 
-    # Greedy eviction: largest-budget idle workers first, so we reclaim the
-    # most memory per kill.  We project how much free memory each eviction
-    # would recover (assuming the worker actually frees its declared budget)
-    # and stop once we've crossed back above the critical threshold.
-    idle_running.sort(
-        key=lambda sid: stacks_by_id[sid].get("memoryPerWorkerMB", 3000),
-        reverse=True,
-    )
+    # Greedy eviction: largest actual-RSS idle workers first, so we reclaim
+    # the most memory per kill.  Uses measured RSS via psutil rather than
+    # declared budgets for accurate projection.
+    def _rss_bytes(sid: str) -> int:
+        pid = running.get(sid)
+        if pid is not None:
+            rss_mb = _measure_process_rss_mb(pid)
+            if rss_mb is not None:
+                return rss_mb * 1024 * 1024
+        return stacks_by_id[sid].get("memoryPerWorkerMB", 3000) * 1024 * 1024
+
+    idle_running.sort(key=lambda sid: _rss_bytes(sid), reverse=True)
 
     total_bytes = snapshot.get("totalBytes", 1)
     free_bytes = snapshot.get("freeBytes", 0)
@@ -942,7 +974,7 @@ def _check_memory_pressure(
 
     for sid in idle_running:
         evict.add(sid)
-        freed = stacks_by_id[sid].get("memoryPerWorkerMB", 3000) * 1024 * 1024
+        freed = _rss_bytes(sid)
         projected_free = free_bytes + freed
         projected_ratio = projected_free / total_bytes
         if projected_ratio > COMPANION_CRITICAL_FREE_RATIO:

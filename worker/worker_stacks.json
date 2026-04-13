@@ -8,7 +8,7 @@
     "acceptNonTtsSteps": true,
     "ttsModels": ["gemini-tts-flash", "gemini-tts-pro"],
     "extraCapabilityKeys": [],
-    "memoryPerWorkerMB": 2000
+    "memoryPerWorkerMB": 9000
   },
   {
     "id": "local-image",
@@ -19,7 +19,7 @@
     "acceptNonTtsSteps": false,
     "ttsModels": [],
     "extraCapabilityKeys": ["image"],
-    "memoryPerWorkerMB": 6000
+    "memoryPerWorkerMB": 8000
   },
   {
     "id": "local-tts-qwen",
@@ -31,6 +31,6 @@
     "acceptNonTtsSteps": false,
     "ttsModels": ["qwen3-base"],
     "extraCapabilityKeys": [],
-    "memoryPerWorkerMB": 4000
+    "memoryPerWorkerMB": 5000
   }
 ]
