@@ -111,18 +111,18 @@ def execute_generate_script(ctx: StepContext) -> StepResult:
         action writes ``scriptApprovedAt`` and re-triggers the pipeline.
     """
     # Deferred import keeps heavy LLM deps out of the module's top-level scope.
-    from factory_v2.shared.llm_generator import generate_script
+    from factory_v2.shared.llm_generator import generate_script, generate_title
 
     job_data = _content_job_data(ctx.job)
     runtime = _runtime(ctx.job)
 
     # Idempotency guard: reuse the script if a previous run already generated one.
     script = runtime.get("generated_script") or generate_script(job_data)
-    # Title resolution cascade: runtime > explicit title > topic fallback.
+    # Title resolution cascade: runtime > explicit admin title > LLM-generated title.
     generated_title = (
         runtime.get("generated_title")
         or (job_data.get("title") or "").strip()
-        or job_data.get("params", {}).get("topic", "Untitled").strip().title()
+        or generate_title(job_data, script)
     )
     script_approval = _script_approval(runtime, job_data)
     # Approval is needed when the feature is enabled AND nobody has approved yet.

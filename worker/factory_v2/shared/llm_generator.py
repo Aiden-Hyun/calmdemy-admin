@@ -188,3 +188,94 @@ def generate_script(job_data: dict) -> str:
     logger.info("LLM script generated", extra={"model_id": model_id, "words": word_count})
 
     return script
+
+
+# Map content types to user-facing labels for the title prompt.
+_CONTENT_TYPE_LABELS = {
+    "guided_meditation": "guided meditation",
+    "sleep_meditation": "sleep meditation",
+    "bedtime_story": "bedtime story",
+    "emergency_meditation": "emergency meditation",
+    "course_session": "course session",
+}
+
+
+def _fallback_title(job_data: dict) -> str:
+    """Derive a human-readable fallback title from job params.
+
+    Used when the LLM title call fails or returns garbage.  Picks the
+    content-type label + a short topic hint rather than echoing the raw
+    topic/style string verbatim (which may be 'Surprise me — choose freely').
+    """
+    params = job_data.get("params", {})
+    content_type = job_data.get("contentType", "guided_meditation")
+    type_label = _CONTENT_TYPE_LABELS.get(content_type, "meditation").title()
+    topic = (params.get("topic") or "").strip()
+
+    # If the topic is the random placeholder or empty, use just the type label.
+    if not topic or "surprise" in topic.lower():
+        return type_label
+
+    # Truncate long topics to keep the title concise.
+    words = topic.split()
+    if len(words) > 5:
+        topic = " ".join(words[:5])
+
+    return topic.strip().title()
+
+
+def generate_title(job_data: dict, script: str) -> str:
+    """Generate a short, creative title for the content using the LLM.
+
+    Called when the admin did not provide an explicit title.  The LLM reads
+    the already-generated script and produces a concise title that captures
+    its essence -- rather than falling back to the raw topic/style string.
+
+    A brief cooldown is inserted before the LLM call to let local inference
+    servers (LM Studio / Ollama) fully release resources from the preceding
+    script-generation request.  Without this, LM Studio can crash with a
+    ``Channel Error`` on back-to-back inference.
+
+    Args:
+        job_data: The Firestore job document (used to load the LLM adapter
+            and read content-type metadata).
+        script: The generated narration script to derive a title from.
+
+    Returns:
+        A short title string (typically 2-6 words).
+    """
+    import time
+
+    adapter = _get_llm_adapter(job_data)
+    content_type = job_data.get("contentType", "guided_meditation")
+    type_label = _CONTENT_TYPE_LABELS.get(content_type, "meditation")
+
+    # Use up to the first 300 words of the script as context -- enough
+    # for the LLM to grasp the theme while keeping the prompt small.
+    script_preview = " ".join(script.split()[:300])
+
+    prompt = (
+        f"You are naming a {type_label} audio track for a wellness app.\n\n"
+        f"Here is the script:\n\n{script_preview}\n\n"
+        "Write a short, evocative title for this content (2-6 words). "
+        "The title should feel calming and inviting. "
+        "Reply with ONLY the title — no quotes, no punctuation, no explanation."
+    )
+
+    # Cooldown: let LM Studio fully release the previous inference context
+    # before sending the next request.
+    time.sleep(2)
+
+    raw_title = adapter.generate(prompt, max_tokens=30).strip()
+
+    # Strip common LLM artifacts: surrounding quotes, trailing periods.
+    raw_title = raw_title.strip("\"'""''").strip(".").strip()
+
+    # Fallback: if the LLM returned nothing usable, derive from params.
+    if not raw_title or len(raw_title) > 80:
+        raw_title = _fallback_title(job_data)
+        logger.warning("LLM returned unusable title, using fallback", extra={"fallback": raw_title})
+    else:
+        logger.info("LLM title generated", extra={"title": raw_title})
+
+    return raw_title
