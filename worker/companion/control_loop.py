@@ -1301,6 +1301,20 @@ def run_control_loop(db, poll_seconds: float, force_immediate_start: bool):
         force_immediate_start: If True, start stacks on the very first
             iteration without waiting for a full poll cycle.
     """
+    # On startup, kill any orphan workers from a previous companion run.
+    try:
+        startup_stacks = stacks.load_worker_stacks()
+        startup_running = stacks.running_stack_pids(startup_stacks)
+        tracked = set(startup_running.values())
+        orphans_killed = stacks.kill_orphan_workers(tracked)
+        if orphans_killed:
+            logger.warning(
+                "Companion startup: killed orphan workers",
+                extra={"orphans_killed": orphans_killed, "tracked_pids": sorted(tracked)},
+            )
+    except Exception as exc:
+        logger.warning("Orphan cleanup failed on startup", extra={"error": str(exc)})
+
     last_activity_ts = time.time()
     last_factory_recovery_ts = 0.0
     last_queue_metrics_ts = 0.0

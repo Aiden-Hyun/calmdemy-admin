@@ -40,6 +40,8 @@ import subprocess
 import time
 from typing import Callable, Optional
 
+import psutil
+
 from observability import get_logger
 from .stack_config import load_stack_config
 
@@ -113,33 +115,14 @@ def _clear_pid(stack_id: str) -> None:
 def _pid_is_running(pid: int) -> bool:
     """Check if *pid* references a live (non-zombie) process.
 
-    Uses two checks:
-    1. ``os.kill(pid, 0)`` -- signal 0 tests if the process exists
-       without actually sending a signal.
-    2. ``ps -o stat=`` -- needed because zombie processes (state ``Z``)
-       still pass the signal-0 check on macOS/Linux.  A zombie cannot
-       do useful work, so we treat it as "not running" and let the
-       companion respawn the worker.
+    Uses psutil instead of shelling out to ``ps`` to avoid fork() in a
+    multi-threaded process (gRPC threads make fork unsafe on macOS).
     """
     try:
-        os.kill(pid, 0)
-    except OSError:
+        proc = psutil.Process(pid)
+        return proc.status() != psutil.STATUS_ZOMBIE
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
         return False
-    try:
-        # On macOS/Linux, zombie processes still pass kill(pid, 0).
-        # Treat Z-state as not running so companion can respawn workers.
-        result = subprocess.run(
-            ["ps", "-o", "stat=", "-p", str(pid)],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        status = (result.stdout or "").strip().upper()
-        if not status:
-            return False
-        return not status.startswith("Z")
-    except Exception:
-        return True
 
 
 def is_worker_running(stack_id: str) -> bool:
@@ -158,6 +141,33 @@ def is_worker_running(stack_id: str) -> bool:
     return False
 
 
+def kill_orphan_workers(tracked_pids: set[int]) -> int:
+    """Find and kill local_worker.py processes not tracked by the companion.
+
+    Scans all running processes for ``local_worker.py`` and kills any whose
+    PID is not in *tracked_pids*.  This cleans up workers that survived a
+    companion restart without being properly stopped.
+
+    Returns the number of orphans killed.
+    """
+    killed = 0
+    my_pid = os.getpid()
+    for proc in psutil.process_iter(["pid", "cmdline"]):
+        try:
+            pid = proc.info["pid"]
+            if pid == my_pid or pid in tracked_pids:
+                continue
+            cmdline = proc.info.get("cmdline") or []
+            if not any("local_worker.py" in str(arg) for arg in cmdline):
+                continue
+            os.kill(pid, signal.SIGTERM)
+            killed += 1
+            logger.warning("Killed orphan worker", extra={"pid": pid})
+        except (psutil.NoSuchProcess, psutil.AccessDenied, ProcessLookupError):
+            continue
+    return killed
+
+
 def start_worker(stack: dict) -> int:
     """Spawn a ``local_worker.py`` subprocess for *stack*.
 
@@ -172,8 +182,20 @@ def start_worker(stack: dict) -> int:
     Returns:
         The PID of the newly spawned subprocess.
     """
-    os.makedirs(LOG_DIR, exist_ok=True)
+    # Kill any existing process for this stack before spawning a new one.
     stack_id = stack["id"]
+    existing_pid = _read_pid(stack_id)
+    if existing_pid and _pid_is_running(existing_pid):
+        try:
+            os.kill(existing_pid, signal.SIGTERM)
+            logger.info("Stopped existing worker before respawn", extra={
+                "stack_id": stack_id, "old_pid": existing_pid,
+            })
+        except Exception:
+            pass
+        _clear_pid(stack_id)
+
+    os.makedirs(LOG_DIR, exist_ok=True)
     log_file = open(log_path(stack_id), "a", encoding="utf-8")
 
     worker_path = os.path.join(BASE_DIR, "..", "local_worker.py")
@@ -206,12 +228,16 @@ def start_worker(stack: dict) -> int:
     # without delay.
     env.setdefault("PYTHONUNBUFFERED", "1")
 
+    # process_group=0 lets CPython use posix_spawn instead of fork+exec,
+    # avoiding the "multi-threaded process forked" crash when gRPC threads
+    # are active.  Requires Python 3.11+.
     process = subprocess.Popen(
         [python_exec, worker_path],
         cwd=os.path.join(BASE_DIR, ".."),
         stdout=log_file,
         stderr=subprocess.STDOUT,
         env=env,
+        process_group=0,
     )
     _write_pid(stack_id, process.pid)
     return process.pid
