@@ -166,6 +166,7 @@ class StepExecutionWatchdog:
         status_writer: Callable[[dict[str, Any] | None], None],
         worker_id: str,
         job_id: str,
+        content_job_id: str,
         run_id: str,
         step_name: str,
         queue_id: str,
@@ -180,6 +181,7 @@ class StepExecutionWatchdog:
         self.status_writer = status_writer
         self.worker_id = worker_id
         self.job_id = job_id
+        self.content_job_id = content_job_id
         self.run_id = run_id
         self.step_name = step_name
         self.queue_id = queue_id
@@ -207,7 +209,7 @@ class StepExecutionWatchdog:
     def _active_step_payload(self, *, heartbeat_at: datetime) -> dict[str, Any]:
         """Build the worker-status payload shown in admin/recovery views."""
         return {
-            "jobId": self.job_id,
+            "jobId": self.content_job_id or self.job_id,
             "currentQueueId": self.queue_id,
             "currentStepRunId": self.step_run_id,
             "currentRunId": self.run_id,

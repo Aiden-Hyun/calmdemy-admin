@@ -392,6 +392,7 @@ class ClaimLoop:
             status_writer=self._write_worker_status,
             worker_id=self.worker_id,
             job_id=job_id,
+            content_job_id=content_job_id,
             run_id=run_id,
             step_name=step_name,
             queue_id=queue_id,
