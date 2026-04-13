@@ -33,15 +33,31 @@ function deriveV2StepStates(
 ): Map<string, StepState> {
   const states = new Map<string, StepState>();
 
+  // For sharded steps (audio chunks), track per-shard states separately
+  // so we only mark the parent step done when ALL shards have succeeded.
+  const audioShardStates = new Map<string, string>(); // shardKey -> state
+
   for (const entry of timeline) {
-    let key = entry.stepName;
-    // Collapse chunk steps into the synthesize_audio row.
-    if (AUDIO_CHUNK_KEYS.has(key)) {
-      key = 'synthesize_audio';
+    const isAudioChunk = AUDIO_CHUNK_KEYS.has(entry.stepName);
+    const key = isAudioChunk ? 'synthesize_audio' : entry.stepName;
+    const entryState = entry.state;
+
+    if (isAudioChunk) {
+      // Track each shard individually — use the most advanced state per shard.
+      const shardId = `${entry.stepName}:${entry.shardKey || 'root'}`;
+      const currentShard = audioShardStates.get(shardId);
+      if (
+        !currentShard ||
+        entryState === 'succeeded' ||
+        (entryState === 'running' && currentShard !== 'succeeded') ||
+        (entryState === 'failed' && currentShard !== 'succeeded')
+      ) {
+        audioShardStates.set(shardId, entryState);
+      }
+      continue;
     }
 
     const current = states.get(key);
-    const entryState = entry.state;
 
     if (entryState === 'succeeded') {
       const isCheckpoint = entry.workerId === 'checkpoint';
@@ -57,6 +73,25 @@ function deriveV2StepStates(
       current !== 'failed'
     ) {
       states.set(key, 'running');
+    }
+  }
+
+  // Resolve the audio shards into a single synthesize_audio state.
+  if (audioShardStates.size > 0) {
+    const shardValues = Array.from(audioShardStates.values());
+    const allSucceeded = shardValues.every((s) => s === 'succeeded');
+    const anyFailed = shardValues.some((s) => s === 'failed');
+    const anyRunning = shardValues.some((s) => s === 'running' || s === 'leased');
+
+    if (allSucceeded) {
+      states.set('synthesize_audio', 'done');
+    } else if (anyFailed) {
+      states.set('synthesize_audio', 'failed');
+    } else if (anyRunning) {
+      states.set('synthesize_audio', 'running');
+    } else {
+      // Some ready, some succeeded — still in progress.
+      states.set('synthesize_audio', 'running');
     }
   }
 
