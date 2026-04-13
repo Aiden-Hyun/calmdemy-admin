@@ -3087,7 +3087,7 @@ function EditableTitleRow({
     try {
       await onSave(trimmed);
       setEditing(false);
-    } catch {
+    } catch (_e) {
       Alert.alert('Error', 'Failed to update title.');
     } finally {
       setSaving(false);
