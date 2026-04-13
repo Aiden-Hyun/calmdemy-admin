@@ -1496,7 +1496,7 @@ function buildSections(params: {
                   Detailed timeline unavailable or not yet populated; showing compatibility progress.
                 </Text>
               )}
-              <PipelineStepper currentStatus={effectiveStatus} />
+              <PipelineStepper currentStatus={effectiveStatus} timeline={timeline} />
             </>
           )}
         </View>
