@@ -783,6 +783,7 @@ export function JobDetailView({
     onOpenScriptApprovalModal: () => setShowScriptApprovalModal(true),
     onRegeneratePendingScripts: handleRegeneratePendingScripts,
     onRequestThumbnail,
+    onUpdateTitle,
   });
 
   const visibleSections = sections.filter((section) => section.shouldRender);
@@ -1327,6 +1328,7 @@ function buildSections(params: {
   onOpenScriptApprovalModal: () => void;
   onRegeneratePendingScripts: () => void;
   onRequestThumbnail: () => void;
+  onUpdateTitle?: (title: string) => Promise<void>;
 }) {
   const {
     job,
@@ -1368,6 +1370,7 @@ function buildSections(params: {
     onOpenScriptApprovalModal,
     onRegeneratePendingScripts,
     onRequestThumbnail,
+    onUpdateTitle,
   } = params;
 
   const hasCourseConcurrencyData = Boolean(
