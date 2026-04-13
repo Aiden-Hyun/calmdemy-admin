@@ -203,6 +203,7 @@ export function JobDetailView({
   onResumeSubject,
   onDelete,
   onReview,
+  onUpdateTitle,
   layoutMode = 'fullscreen',
 }: Props) {
   const router = useRouter();
@@ -1814,7 +1815,7 @@ function buildSections(params: {
           {(job.generatedTitle || job.title) && (
             <EditableTitleRow
               value={job.generatedTitle || job.title || ''}
-              onSave={props.onUpdateTitle}
+              onSave={onUpdateTitle}
             />
           )}
           <InfoRow
