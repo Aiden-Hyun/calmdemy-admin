@@ -98,6 +98,7 @@ import { Theme } from '@/theme';
 type Props = {
   job: ContentJob;
   onUpdateTitle?: (title: string) => Promise<void>;
+  onRegenerateSingleScript?: (script: string) => Promise<void>;
   factoryJob?: FactoryJob | null;
   factoryRun?: FactoryJobRun | null;
   executionView?: JobExecutionView | null;
@@ -204,6 +205,7 @@ export function JobDetailView({
   onDelete,
   onReview,
   onUpdateTitle,
+  onRegenerateSingleScript,
   layoutMode = 'fullscreen',
 }: Props) {
   const router = useRouter();
@@ -784,6 +786,7 @@ export function JobDetailView({
     onRegeneratePendingScripts: handleRegeneratePendingScripts,
     onRequestThumbnail,
     onUpdateTitle,
+    onRegenerateSingleScript,
   });
 
   const visibleSections = sections.filter((section) => section.shouldRender);
@@ -1329,6 +1332,7 @@ function buildSections(params: {
   onRegeneratePendingScripts: () => void;
   onRequestThumbnail: () => void;
   onUpdateTitle?: (title: string) => Promise<void>;
+  onRegenerateSingleScript?: (script: string) => Promise<void>;
 }) {
   const {
     job,
@@ -1371,6 +1375,7 @@ function buildSections(params: {
     onRegeneratePendingScripts,
     onRequestThumbnail,
     onUpdateTitle,
+    onRegenerateSingleScript,
   } = params;
 
   const hasCourseConcurrencyData = Boolean(
@@ -2496,31 +2501,31 @@ function buildSections(params: {
       ),
     },
     {
-      // Mirrors the "Course Scripts" section below, but for single-content
-      // jobs (guided/sleep/bedtime/emergency).  Those jobs store their LLM
-      // output in job.formattedScript as a single string — no session picker
-      // is needed, so the render model is just a ScrollView.  shouldRender
-      // hides the section entirely when the field is missing (e.g. job
-      // failed before format_script ran) instead of showing an empty panel.
       id: 'singleScript',
       title: 'Script',
       summaryItems: toSummaryItems([
         {
           label: 'Length',
-          value: job.formattedScript
-            ? `${job.formattedScript.length.toLocaleString()} chars`
+          value: (job.generatedScript || job.formattedScript)
+            ? `${(job.generatedScript || job.formattedScript || '').length.toLocaleString()} chars`
             : undefined,
         },
       ]),
       shouldRender:
         SINGLE_SCRIPT_CONTENT_TYPES.has(job.contentType) &&
-        Boolean(job.formattedScript && job.formattedScript.trim()),
+        Boolean((job.generatedScript || job.formattedScript || '').trim()),
       content: (
-        <View style={styles.scrollBox}>
-          <ScrollView nestedScrollEnabled>
-            <Text style={styles.scriptText}>{job.formattedScript}</Text>
-          </ScrollView>
-        </View>
+        <EditableSingleScript
+          generatedScript={job.generatedScript || ''}
+          formattedScript={job.formattedScript || ''}
+          canRegenerate={
+            Boolean(onRegenerateSingleScript) &&
+            (effectiveStatus === 'completed' || effectiveStatus === 'failed')
+          }
+          onRegenerate={onRegenerateSingleScript}
+          styles={styles}
+          theme={theme}
+        />
       ),
     },
     {
@@ -3059,6 +3064,159 @@ function InfoRow({ label, value }: { label: string; value: string }) {
       >
         {getDisplayValue(value)}
       </Text>
+    </View>
+  );
+}
+
+function EditableSingleScript({
+  generatedScript,
+  formattedScript,
+  canRegenerate,
+  onRegenerate,
+  styles,
+  theme,
+}: {
+  generatedScript: string;
+  formattedScript: string;
+  canRegenerate: boolean;
+  onRegenerate?: (script: string) => Promise<void>;
+  styles: ReturnType<typeof createStyles>;
+  theme: Theme;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(generatedScript || formattedScript);
+  const [regenerating, setRegenerating] = useState(false);
+
+  useEffect(() => {
+    if (!editing) {
+      setDraft(generatedScript || formattedScript);
+    }
+  }, [generatedScript, formattedScript, editing]);
+
+  const displayScript = formattedScript || generatedScript;
+  const hasChanges = editing && draft.trim() !== (generatedScript || formattedScript).trim();
+
+  const handleRegenerate = async () => {
+    if (!onRegenerate || !draft.trim()) return;
+    setRegenerating(true);
+    try {
+      await onRegenerate(draft.trim());
+      setEditing(false);
+    } catch (_e) {
+      Alert.alert('Error', 'Failed to regenerate. Please try again.');
+    } finally {
+      setRegenerating(false);
+    }
+  };
+
+  if (!editing) {
+    return (
+      <View>
+        <View style={styles.scrollBox}>
+          <ScrollView nestedScrollEnabled>
+            <Text style={styles.scriptText}>{displayScript}</Text>
+          </ScrollView>
+        </View>
+        {canRegenerate && (
+          <Pressable
+            onPress={() => setEditing(true)}
+            style={({ pressed }) => [
+              {
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                paddingVertical: 10,
+                borderRadius: 10,
+                marginTop: 12,
+                backgroundColor: theme.colors.surface,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+              },
+              pressed && { opacity: 0.85 },
+            ]}
+          >
+            <Ionicons name="create-outline" size={16} color={theme.colors.primary} />
+            <Text style={{
+              fontFamily: 'DMSans-SemiBold',
+              fontSize: 13,
+              color: theme.colors.primary,
+            }}>
+              Edit Script
+            </Text>
+          </Pressable>
+        )}
+      </View>
+    );
+  }
+
+  return (
+    <View>
+      <View style={[styles.scrollBox, { borderColor: theme.colors.primary, borderWidth: 1 }]}>
+        <ScrollView nestedScrollEnabled>
+          <TextInput
+            style={[styles.scriptText, { minHeight: 300 }]}
+            value={draft}
+            onChangeText={setDraft}
+            multiline
+            editable={!regenerating}
+          />
+        </ScrollView>
+      </View>
+      <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+        <Pressable
+          onPress={handleRegenerate}
+          disabled={!hasChanges || regenerating}
+          style={({ pressed }) => [
+            {
+              flex: 1,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+              paddingVertical: 10,
+              borderRadius: 10,
+              backgroundColor: hasChanges ? '#6C5CE7' : theme.colors.gray[300],
+            },
+            (pressed || regenerating) && { opacity: 0.85 },
+          ]}
+        >
+          <Ionicons
+            name={regenerating ? 'hourglass-outline' : 'refresh-outline'}
+            size={16}
+            color="#fff"
+          />
+          <Text style={{ fontFamily: 'DMSans-SemiBold', fontSize: 13, color: '#fff' }}>
+            {regenerating ? 'Regenerating...' : 'Regenerate Audio'}
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={() => {
+            setDraft(generatedScript || formattedScript);
+            setEditing(false);
+          }}
+          disabled={regenerating}
+          style={({ pressed }) => [
+            {
+              paddingHorizontal: 16,
+              paddingVertical: 10,
+              borderRadius: 10,
+              backgroundColor: theme.colors.surface,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+            },
+            pressed && { opacity: 0.85 },
+          ]}
+        >
+          <Text style={{
+            fontFamily: 'DMSans-SemiBold',
+            fontSize: 13,
+            color: theme.colors.textMuted,
+          }}>
+            Cancel
+          </Text>
+        </Pressable>
+      </View>
     </View>
   );
 }

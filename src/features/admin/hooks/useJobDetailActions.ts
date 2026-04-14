@@ -39,7 +39,7 @@ import {
   useJobDetail,
   useJobStepTimeline,
 } from './useJobQueue';
-import { publishCompletedJob, updateJobTitle } from '../data/adminRepository';
+import { publishCompletedJob, updateJobTitle, regenerateSingleContentScript } from '../data/adminRepository';
 import { CourseRegenerationMode } from '../types';
 
 /**
@@ -318,6 +318,11 @@ export function useJobDetailActions(jobId: string | undefined) {
     await updateJobTitle(job.id, title);
   }, [job]);
 
+  const handleRegenerateSingleScript = useCallback(async (script: string) => {
+    if (!job) return;
+    await regenerateSingleContentScript(job, script);
+  }, [job]);
+
   // Derived flags (same logic as app/admin/job/[id].tsx).
   const isCourseRegenAwaitingPublish =
     job?.contentType === 'course' &&
@@ -400,5 +405,6 @@ export function useJobDetailActions(jobId: string | undefined) {
     handleResumeSubject,
     handleReview,
     handleUpdateTitle,
+    handleRegenerateSingleScript,
   };
 }

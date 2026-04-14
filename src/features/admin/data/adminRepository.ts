@@ -1576,6 +1576,40 @@ export async function publishCompletedJob(jobId: string): Promise<void> {
   });
 }
 
+// ==================== REGENERATE SINGLE-CONTENT SCRIPT ====================
+
+export async function regenerateSingleContentScript(
+  job: ContentJob,
+  editedScript: string,
+): Promise<void> {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('Not authenticated');
+  if (job.contentType === 'course' || job.contentType === 'full_subject') {
+    throw new Error('Use regenerateCourseSessions for course/subject jobs.');
+  }
+  if (job.status !== 'completed' && job.status !== 'failed') {
+    throw new Error('Can only edit scripts on completed or failed jobs.');
+  }
+  if (!editedScript.trim()) {
+    throw new Error('Script cannot be empty.');
+  }
+
+  await updateDoc(doc(jobsCollection, job.id), {
+    status: 'pending',
+    error: null,
+    errorCode: null,
+    failedStage: null,
+    startedAt: null,
+    completedAt: null,
+    runEndedAt: null,
+    lastRunStatus: null,
+    generatedScript: editedScript.trim(),
+    formattedScript: null,
+    ...freshDispatchResetFields(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
 export async function requestCourseThumbnailGeneration(job: ContentJob): Promise<void> {
   if (job.contentType !== 'course') {
     throw new Error('Thumbnail generation is only supported for course jobs.');

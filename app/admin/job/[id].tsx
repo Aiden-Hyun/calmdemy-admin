@@ -62,6 +62,7 @@ export default function JobDetailScreen() {
         onDelete={state.handleDelete}
         onReview={state.handleReview}
         onUpdateTitle={state.handleUpdateTitle}
+        onRegenerateSingleScript={state.handleRegenerateSingleScript}
       />
     </View>
   );
