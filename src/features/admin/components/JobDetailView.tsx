@@ -2522,6 +2522,7 @@ function buildSections(params: {
             Boolean(onRegenerateSingleScript) &&
             (effectiveStatus === 'completed' || effectiveStatus === 'failed')
           }
+          isFailed={effectiveStatus === 'failed'}
           onRegenerate={onRegenerateSingleScript}
           styles={styles}
           theme={theme}
@@ -3072,6 +3073,7 @@ function EditableSingleScript({
   generatedScript,
   formattedScript,
   canRegenerate,
+  isFailed = false,
   onRegenerate,
   styles,
   theme,
@@ -3079,6 +3081,7 @@ function EditableSingleScript({
   generatedScript: string;
   formattedScript: string;
   canRegenerate: boolean;
+  isFailed?: boolean;
   onRegenerate?: (script: string) => Promise<void>;
   styles: ReturnType<typeof createStyles>;
   theme: Theme;
@@ -3094,7 +3097,9 @@ function EditableSingleScript({
   }, [generatedScript, formattedScript, editing]);
 
   const displayScript = formattedScript || generatedScript;
-  const hasChanges = editing && draft.trim() !== (generatedScript || formattedScript).trim();
+  const hasChanges = editing && (
+    isFailed || draft.trim() !== (generatedScript || formattedScript).trim()
+  );
 
   const handleRegenerate = async () => {
     if (!onRegenerate || !draft.trim()) return;
@@ -3187,7 +3192,7 @@ function EditableSingleScript({
             color="#fff"
           />
           <Text style={{ fontFamily: 'DMSans-SemiBold', fontSize: 13, color: '#fff' }}>
-            {regenerating ? 'Regenerating...' : 'Regenerate Audio'}
+            {regenerating ? (isFailed ? 'Retrying...' : 'Regenerating...') : (isFailed ? 'Save & Retry' : 'Regenerate Audio')}
           </Text>
         </Pressable>
         <Pressable
