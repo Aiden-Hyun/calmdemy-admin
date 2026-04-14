@@ -93,7 +93,10 @@ export function OfflineNavigator({ children }: OfflineNavigatorProps) {
     // Don't do anything while loading initial network state or navigation isn't ready
     if (isLoading || !navigationReady) return;
 
-    if (isOffline && !isOnDownloadsPage) {
+    // Admin routes work with Firestore (not cached content), so offline
+    // redirect is irrelevant and disruptive — skip it entirely.
+    const isOnAdminPage = pathname.startsWith('/admin');
+    if (isOffline && !isOnDownloadsPage && !isOnAdminPage) {
       // Store current path before navigating to downloads
       previousPathRef.current = pathname;
       hasNavigatedToOffline.current = true;
