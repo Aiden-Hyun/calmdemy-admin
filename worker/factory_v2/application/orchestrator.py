@@ -377,20 +377,28 @@ class Orchestrator:
 
         runtime = dict(job.get("runtime") or {})
 
-        # Walk the pipeline in reverse: find the latest completed step,
-        # then return the *next* step after it.
-        if str(runtime.get("published_content_id") or "").strip():
-            return "publish_content"  # re-publish
-        if str(runtime.get("storage_path") or "").strip():
-            return "publish_content"  # audio done, publish failed
-        if (
-            str(runtime.get("thumbnail_url") or "").strip()
+        has_script = bool(str(runtime.get("generated_script") or "").strip())
+        has_formatted = bool(str(runtime.get("formatted_script") or "").strip())
+        has_image = (
+            bool(str(runtime.get("thumbnail_url") or "").strip())
             and not self._single_thumbnail_generation_requested(job)
-        ):
+        )
+        has_audio = bool(str(runtime.get("storage_path") or "").strip())
+        has_published = bool(str(runtime.get("published_content_id") or "").strip())
+
+        # Walk the pipeline in reverse: find the latest completed step,
+        # then return the *next* step after it.  Each check also verifies
+        # that all prior steps completed — if an earlier artifact was
+        # cleared (e.g. script edit), we must re-run from that point.
+        if has_published and has_audio and has_formatted and has_script:
+            return "publish_content"
+        if has_audio and has_formatted and has_script:
+            return "publish_content"
+        if has_image and has_formatted and has_script:
             return self._SINGLE_CONTENT_RESUME_AFTER_IMAGE
-        if str(runtime.get("formatted_script") or "").strip():
+        if has_formatted and has_script:
             return "generate_image"
-        if str(runtime.get("generated_script") or "").strip():
+        if has_script:
             return "format_script"
         return None
 
