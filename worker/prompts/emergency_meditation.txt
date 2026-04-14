@@ -7,7 +7,7 @@ REQUIREMENTS:
 
 SCRIPT FORMAT:
 - Write in second person ("you")
-- Include [PAUSE 3s], [PAUSE 5s] markers for breathing pauses
+- IMPORTANT: Insert [PAUSE 3s] or [PAUSE 5s] markers THROUGHOUT the script — after every 2-3 sentences, especially after breathing instructions. These pauses give the listener time to follow along. A 5-minute script should have at least 15-20 pause markers. Do NOT cluster them only at the end.
 - Start immediately with grounding — no long introductions
 - Use direct, reassuring language: "You are safe. You are okay."
 - Include the 5-4-3-2-1 grounding technique or similar concrete anchoring

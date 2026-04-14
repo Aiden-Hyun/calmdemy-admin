@@ -9,7 +9,7 @@ REQUIREMENTS:
 
 SCRIPT FORMAT:
 - Write in second person ("you")
-- Include [PAUSE 3s], [PAUSE 5s], [PAUSE 10s] markers for silent pauses
+- IMPORTANT: Insert [PAUSE 3s], [PAUSE 5s], or [PAUSE 10s] markers THROUGHOUT the script — after every 2-4 sentences. These pauses are critical for meditation pacing. A 10-minute script should have at least 20-30 pause markers spread evenly. Do NOT cluster them only at the end.
 - Start with a welcoming introduction (30 seconds)
 - Include a body/main section with the core practice
 - End with a gentle return to awareness and closing (30 seconds)

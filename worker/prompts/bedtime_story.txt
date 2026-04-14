@@ -7,7 +7,7 @@ REQUIREMENTS:
 
 SCRIPT FORMAT:
 - Write in a gentle, narrative third-person style
-- Include [PAUSE 3s], [PAUSE 5s] markers between scenes or paragraphs
+- IMPORTANT: Insert [PAUSE 3s] or [PAUSE 5s] markers THROUGHOUT the story — between paragraphs and after every 3-5 sentences. These pauses are critical for pacing. A 10-minute story should have at least 15-25 pause markers spread evenly. Do NOT cluster them only at the end.
 - The story should be calming and peaceful — no conflict, tension, or excitement
 - Use rich sensory descriptions (soft sounds, warm colors, gentle textures)
 - The pacing should gradually slow down

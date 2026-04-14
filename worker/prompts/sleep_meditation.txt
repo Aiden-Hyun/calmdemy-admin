@@ -8,10 +8,10 @@ REQUIREMENTS:
 
 SCRIPT FORMAT:
 - Write in second person ("you")
-- Include [PAUSE 5s], [PAUSE 10s], [PAUSE 15s] markers for silent pauses
+- IMPORTANT: Insert [PAUSE 5s], [PAUSE 10s], or [PAUSE 15s] markers THROUGHOUT the script — after every 2-4 sentences. These pauses are critical for the meditation pacing. A 10-minute script should have at least 20-30 pause markers spread evenly. Do NOT cluster them only at the end.
+- Start with [PAUSE 5s] pauses in the opening, gradually increase to [PAUSE 10s] in the middle, and use [PAUSE 15s] toward the end
 - Start gently — assume the listener is already lying in bed
 - Gradually slow the pace as the script progresses
-- Use longer pauses toward the end
 - Use soft, drowsy language — repetition is welcome
 - Include body relaxation and breath awareness
 - The ending should trail off naturally, not conclude firmly
