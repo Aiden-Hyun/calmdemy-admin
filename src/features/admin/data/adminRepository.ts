@@ -1605,6 +1605,8 @@ export async function regenerateSingleContentScript(
     lastRunStatus: null,
     generatedScript: editedScript.trim(),
     formattedScript: null,
+    audioPath: null,
+    audioDurationSec: null,
     ...freshDispatchResetFields(),
     updatedAt: serverTimestamp(),
   });
