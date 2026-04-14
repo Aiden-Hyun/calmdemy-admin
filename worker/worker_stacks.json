@@ -32,5 +32,17 @@
     "ttsModels": ["qwen3-base"],
     "extraCapabilityKeys": [],
     "memoryPerWorkerMB": 5000
+  },
+  {
+    "id": "local-tts-moss",
+    "role": "tts",
+    "venv": ".venv-moss",
+    "replicas": 1,
+    "enabled": true,
+    "dispatch": false,
+    "acceptNonTtsSteps": false,
+    "ttsModels": ["moss-tts"],
+    "extraCapabilityKeys": [],
+    "memoryPerWorkerMB": 6000
   }
 ]

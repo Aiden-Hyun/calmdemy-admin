@@ -65,6 +65,12 @@ export const TTS_MODELS: ModelOption[] = [
     description: 'Local voice cloning using sample_voices reference pairs',
     backend: 'local',
   },
+  {
+    id: 'moss-tts',
+    label: 'MOSS TTS',
+    description: 'Local voice cloning via MOSS-TTS (1.7B)',
+    backend: 'local',
+  },
 ];
 
 // ==================== VOICES ====================
@@ -88,6 +94,28 @@ export const TTS_VOICES: VoiceOption[] = [
     id: 'daniel_16s',
     label: 'Daniel',
     ttsModel: 'qwen3-base',
+    description: 'Clone voice from sample_voices/daniel_16s.wav',
+    sampleAsset: require('../../../../sample_voices/daniel_16s.wav'),
+  },
+  // MOSS-TTS voices (same reference audio, no transcript needed)
+  {
+    id: 'declutter_the_mind_7s',
+    label: 'John',
+    ttsModel: 'moss-tts',
+    description: 'Clone voice from sample_voices/declutter_the_mind_7s.wav',
+    sampleAsset: require('../../../../sample_voices/declutter_the_mind_7s.wav'),
+  },
+  {
+    id: 'laura_qwen',
+    label: 'Laura',
+    ttsModel: 'moss-tts',
+    description: 'Clone voice from sample_voices/laura_qwen.wav',
+    sampleAsset: require('../../../../sample_voices/laura_qwen.wav'),
+  },
+  {
+    id: 'daniel_16s',
+    label: 'Daniel',
+    ttsModel: 'moss-tts',
     description: 'Clone voice from sample_voices/daniel_16s.wav',
     sampleAsset: require('../../../../sample_voices/daniel_16s.wav'),
   },
