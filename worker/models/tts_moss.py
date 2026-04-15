@@ -79,7 +79,8 @@ def _resolve_device() -> tuple[str, Any, Any]:
     """Detect the best available compute device.
 
     Resolution: MPS (Apple Silicon) > CPU.
-    MOSS-TTS Local uses float32 on both MPS and CPU.
+    Uses bfloat16 to halve memory footprint (~12 GB instead of ~24 GB).
+    Override with MOSS_TTS_DTYPE=float32 if you hit numerical issues.
     """
     try:
         import torch
@@ -90,17 +91,25 @@ def _resolve_device() -> tuple[str, Any, Any]:
         ) from exc
 
     device_arg = os.getenv("MOSS_TTS_DEVICE", "auto").strip().lower() or "auto"
+    dtype_arg = os.getenv("MOSS_TTS_DTYPE", "bfloat16").strip().lower()
+
+    dtype_map = {
+        "bfloat16": torch.bfloat16,
+        "float16": torch.float16,
+        "float32": torch.float32,
+    }
+    dtype = dtype_map.get(dtype_arg, torch.bfloat16)
 
     if device_arg == "auto":
         if torch.backends.mps.is_available():
-            return "mps", torch.float32, torch
-        return "cpu", torch.float32, torch
+            return "mps", dtype, torch
+        return "cpu", dtype, torch
 
     if device_arg.startswith("cuda"):
-        return device_arg, torch.bfloat16, torch
+        return device_arg, dtype, torch
     if device_arg == "mps":
-        return "mps", torch.float32, torch
-    return "cpu", torch.float32, torch
+        return "mps", dtype, torch
+    return "cpu", dtype, torch
 
 
 # ---------------------------------------------------------------------------
