@@ -61,9 +61,25 @@ Three-entry manifest / nine-stack runtime default:
 `local-qc` runs Whisper transcription for per-chunk audio QC. Stack auto-starts and venv auto-provisions; route jobs through it by setting `FACTORY_QC_ENABLED=true`. See [CONTENT_FACTORY.md#audio-qc](CONTENT_FACTORY.md#audio-qc).
 
 - `venv: .venv-qc` (provisioned from `requirements.qc.txt`: openai-whisper + num2words)
-- `replicas: 1` (Whisper model takes ~6 GB resident; raise only if host has memory)
+- `replicas: 1` (Whisper model takes ~3–4 GB resident; raise only if host has memory)
 - `extraCapabilityKeys: [qc]` — claims `qc_audio_chunk` and `qc_course_audio_chunk` queue items
 - `dispatch: false`, `acceptNonTtsSteps: false`
+
+## `memoryPerWorkerMB` calibration
+
+The companion's memory guard uses each stack's `memoryPerWorkerMB` as the *cold-spawn cost estimate* — once a worker is alive, the guard switches to actual measured RSS. So this number only matters for the "should I spawn a new worker?" decision. **Set it to your best estimate of peak resident memory during a job, not idle.**
+
+Current values (calibrated 2026-05; revise as workloads change):
+
+| Stack | `memoryPerWorkerMB` | Rationale |
+|---|---|---|
+| `local-primary` | 2000 | Dispatcher + LLM client + cloud-only TTS (Gemini). No local model. |
+| `local-image` | 12000 | SDXL CoreML inference observed at ~11 GB peak. |
+| `local-tts-qwen` | 3500 | Qwen3 base model ~1.5–3 GB; bumped for buffer. |
+| `local-tts-moss` | 3500 | MOSS-TTS in bfloat16 (per recent commit halving memory). |
+| `local-qc` | 4000 | Whisper turbo (~3 GB) + ffmpeg subprocess overhead. |
+
+If you see "Memory guard reduced worker pool" log entries that evict a stack you wanted spawned, either lower its declared budget (if it's actually using less) or close other apps to free RAM. The actual-RSS branch keeps already-running workers alive, so eviction only affects the next spawn.
 
 This profile expands to `local-primary`, `local-image`, `local-tts-qwen`, `local-tts-qwen-2`, `local-tts-qwen-3`, `local-tts-qwen-4`,
 `local-tts-qwen-5`, `local-tts-qwen-6`, and `local-tts-qwen-7`, supporting up to 7 concurrent Qwen synth queue items,

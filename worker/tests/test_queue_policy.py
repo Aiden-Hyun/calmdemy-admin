@@ -51,7 +51,8 @@ class QueuePolicyTests(unittest.TestCase):
         )
 
     def test_legacy_payload_without_capability_key_is_supported_by_matching_worker(self) -> None:
-        plan = build_worker_capability_plan(
+        # Matching worker supports the legacy payload's required_tts_model.
+        matching_plan = build_worker_capability_plan(
             accept_non_tts_steps=False,
             supported_tts_models={"qwen3-base"},
         )
@@ -61,8 +62,13 @@ class QueuePolicyTests(unittest.TestCase):
                     "step_name": "synthesize_course_audio_chunk",
                     "required_tts_model": "qwen3-base",
                 },
-                plan,
+                matching_plan,
             )
+        )
+        # Non-matching worker (different TTS model) must reject the same payload.
+        non_matching_plan = build_worker_capability_plan(
+            accept_non_tts_steps=False,
+            supported_tts_models={"moss-tts"},
         )
         self.assertFalse(
             supports_worker_payload(
@@ -70,7 +76,7 @@ class QueuePolicyTests(unittest.TestCase):
                     "step_name": "synthesize_course_audio_chunk",
                     "required_tts_model": "qwen3-base",
                 },
-                plan,
+                non_matching_plan,
             )
         )
 

@@ -197,6 +197,10 @@ class CompanionControlLoopTests(unittest.TestCase):
             "has_any_work": True,
         }
 
+        # Budget = freeBytes - COMPANION_OS_RESERVE_MB (default 2048 MB).
+        # Qwen stack declares memoryPerWorkerMB=3500. With 7 GB mocked free,
+        # budget is ~4627 MB — fits one qwen (3500) but not two (7000).
+        # Test asserts the memory guard caps at exactly one under pressure.
         with (
             patch("companion.control_loop._collect_auto_workload", return_value=workload),
             patch(
@@ -227,7 +231,16 @@ class CompanionControlLoopTests(unittest.TestCase):
             "has_any_work": True,
         }
 
-        with patch("companion.control_loop._collect_auto_workload", return_value=workload):
+        # Mock memory so the test is deterministic regardless of host RAM.
+        # local-image declares 12 GB; 16 GB free - 2 GB OS reserve = 14 GB
+        # budget gives plenty of headroom to spawn it.
+        with (
+            patch("companion.control_loop._collect_auto_workload", return_value=workload),
+            patch(
+                "companion.control_loop._system_memory_snapshot",
+                return_value={"freeRatio": 0.45, "freeBytes": 16_000_000_000},
+            ),
+        ):
             desired_ids, resolved_workload = _desired_auto_stack_ids(object(), enabled_stacks, running={})
 
         self.assertEqual(resolved_workload, workload)
