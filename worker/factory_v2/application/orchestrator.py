@@ -1113,7 +1113,17 @@ class Orchestrator:
         straight to assembly it enqueues one ``qc_audio_chunk`` queue item
         per chunk shard. The QC step verdicts then drive
         ``_evaluate_single_audio_qc``.
+
+        Defensive WAV check: a synth step_run can be marked succeeded from a
+        prior run via ``mark_succeeded_from_checkpoint`` (smart-retry / resume
+        path), but chunk WAVs live in ``/tmp/calmdemy_single_tts/<job_id>/``
+        which doesn't survive a system reboot or tmp cleanup. If the WAV is
+        gone, QC would fail with FileNotFoundError and the run would die.
+        Instead, detect missing WAVs here and re-render synth for those
+        chunks via the standard retry path.
         """
+        from factory_v2.shared.course_tts_chunks import single_chunk_wav_path
+
         expected = list(enumerate(self._single_audio_chunk_shards(job)))
         if not expected:
             return False
@@ -1131,8 +1141,35 @@ class Orchestrator:
         if not expected_set.issubset(succeeded):
             return False
 
-        # All synth chunks done. Fan out QC for any chunk that doesn't
-        # already have a QC step run (idempotent re-enqueue safe).
+        # Verify each chunk's WAV is actually on disk. A "succeeded" synth
+        # step_run is necessary but not sufficient — see docstring.
+        chunks_needing_resynth: list[int] = []
+        for chunk_index, _shard in expected:
+            wav_path = single_chunk_wav_path(run_id, chunk_index)
+            if not wav_path.is_file():
+                chunks_needing_resynth.append(chunk_index)
+
+        if chunks_needing_resynth:
+            logger.warning(
+                "qc fan-out: chunk WAVs missing on disk; re-rendering synth before QC",
+                extra={
+                    "job_id": job_id,
+                    "run_id": run_id,
+                    "chunk_indexes": chunks_needing_resynth,
+                },
+            )
+            # Reuse the FAIL-retry helper — it deletes any stale step_run docs
+            # and re-enqueues synth. The unlink call is a no-op when the WAV
+            # is already missing. After synth re-runs, this fan-out fires
+            # again and (assuming WAVs are now present) enqueues QC.
+            self._retry_qc_failed_chunks(
+                job, job_id, run_id,
+                chunk_indexes=chunks_needing_resynth,
+            )
+            return True
+
+        # All WAVs present. Fan out QC for any chunk that doesn't already
+        # have a QC step run (idempotent re-enqueue safe).
         for chunk_index, shard in expected:
             if self.step_run_repo.state(run_id, SINGLE_AUDIO_QC_STEP, shard):
                 continue

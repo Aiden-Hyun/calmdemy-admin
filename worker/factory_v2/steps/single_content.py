@@ -429,7 +429,18 @@ def execute_qc_audio_chunk(ctx: StepContext) -> StepResult:
 
     wav_path = single_chunk_wav_path(ctx.run_id, chunk_index)
     if not wav_path.is_file():
-        raise FileNotFoundError(f"Chunk WAV missing for QC: {wav_path}")
+        # Normally caught by the orchestrator's QC fan-out helper, which
+        # checks WAV existence before enqueueing QC and re-renders synth
+        # if missing. This is a defensive backstop for races or out-of-band
+        # deletions. Raise a clear, retryable-style error so the operator
+        # sees what's actually wrong rather than a deep-stack tb from
+        # Whisper trying to load a missing file.
+        raise FileNotFoundError(
+            f"Chunk WAV missing for QC: {wav_path}. "
+            f"The synth step's output is gone (likely tmp cleanup, system "
+            f"reboot, or smart-retry resumed past synth without the WAVs). "
+            f"Use 'Save & Retry' to force a fresh synth render."
+        )
 
     # Read prior attempt count from runtime so consecutive retries advance the counter.
     chunk_qc_state = (runtime.get("chunk_qc") or {}).get(str(chunk_index)) or {}
