@@ -13,6 +13,11 @@ QWEN_PY="$QWEN_VENV/bin/python"
 QWEN_REQ="$WORKER_DIR/requirements.qwen.txt"
 QWEN_MARKER="$QWEN_VENV/.deps_installed"
 
+QC_VENV="$WORKER_DIR/.venv-qc"
+QC_PY="$QC_VENV/bin/python"
+QC_REQ="$WORKER_DIR/requirements.qc.txt"
+QC_MARKER="$QC_VENV/.deps_installed"
+
 ensure_venv() {
   local venv_dir="$1"
   local python_bin="$2"
@@ -35,6 +40,7 @@ ensure_venv() {
 
 ensure_venv "$BASE_VENV" "$BASE_PY" "$BASE_REQ" "$BASE_MARKER"
 ensure_venv "$QWEN_VENV" "$QWEN_PY" "$QWEN_REQ" "$QWEN_MARKER"
+ensure_venv "$QC_VENV" "$QC_PY" "$QC_REQ" "$QC_MARKER"
 
 echo "[companion] Starting local companion..."
 exec "$BASE_PY" "$WORKER_DIR/local_companion.py"

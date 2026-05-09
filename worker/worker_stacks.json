@@ -44,5 +44,17 @@
     "ttsModels": ["moss-tts"],
     "extraCapabilityKeys": [],
     "memoryPerWorkerMB": 6000
+  },
+  {
+    "id": "local-qc",
+    "role": "qc",
+    "venv": ".venv-qc",
+    "replicas": 1,
+    "enabled": true,
+    "dispatch": false,
+    "acceptNonTtsSteps": false,
+    "ttsModels": [],
+    "extraCapabilityKeys": ["qc"],
+    "memoryPerWorkerMB": 6000
   }
 ]

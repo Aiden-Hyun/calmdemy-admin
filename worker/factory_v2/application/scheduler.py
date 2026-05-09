@@ -111,6 +111,9 @@ SINGLE_CONTENT_WORKFLOW = WorkflowSpec(
         "generate_image",
         "synthesize_audio",
         "synthesize_audio_chunk",
+        # qc_audio_chunk runs between synth and assemble when FACTORY_QC_ENABLED=true.
+        # Orchestrator-managed (no static edge); see Orchestrator._on_single_content_step_succeeded.
+        "qc_audio_chunk",
         "assemble_audio",
         "post_process_audio",
         "upload_audio",

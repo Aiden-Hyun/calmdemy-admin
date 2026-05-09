@@ -56,6 +56,15 @@ Three-entry manifest / nine-stack runtime default:
    - `acceptNonTtsSteps: false`
    - `ttsModels: [qwen3-base]`
 
+### Audio QC stack
+
+`local-qc` runs Whisper transcription for per-chunk audio QC. Stack auto-starts and venv auto-provisions; route jobs through it by setting `FACTORY_QC_ENABLED=true`. See [CONTENT_FACTORY.md#audio-qc](CONTENT_FACTORY.md#audio-qc).
+
+- `venv: .venv-qc` (provisioned from `requirements.qc.txt`: openai-whisper + num2words)
+- `replicas: 1` (Whisper model takes ~6 GB resident; raise only if host has memory)
+- `extraCapabilityKeys: [qc]` — claims `qc_audio_chunk` and `qc_course_audio_chunk` queue items
+- `dispatch: false`, `acceptNonTtsSteps: false`
+
 This profile expands to `local-primary`, `local-image`, `local-tts-qwen`, `local-tts-qwen-2`, `local-tts-qwen-3`, `local-tts-qwen-4`,
 `local-tts-qwen-5`, `local-tts-qwen-6`, and `local-tts-qwen-7`, supporting up to 7 concurrent Qwen synth queue items,
 while preserving one dispatcher/non-TTS executor and one dedicated image executor.

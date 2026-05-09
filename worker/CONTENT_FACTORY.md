@@ -48,10 +48,11 @@ V1 runtime codepaths are removed. The worker runs V2 only.
 1. `generate_script`
 2. `format_script`
 3. `generate_image`
-4. `synthesize_audio`
-5. `post_process_audio`
-6. `upload_audio`
-7. `publish_content`
+4. `synthesize_audio` (or `synthesize_audio_chunk` ×N → `assemble_audio` for chunked path)
+5. `qc_audio_chunk` ×N — *opt-in via `FACTORY_QC_ENABLED=true`* (per-chunk Whisper QC, see [Audio QC](#audio-qc))
+6. `post_process_audio`
+7. `upload_audio`
+8. `publish_content`
 
 ### Course
 
@@ -69,6 +70,53 @@ Course audio is fan-out/fan-in:
 - Fan-in: enqueue `upload_course_audio` only after all session shards are complete.
 - Checkpointing: each successful shard immediately updates `runtime.course_audio_results` and
   `content_jobs.courseAudioResults` for resume-on-retry behavior.
+
+## Audio QC
+
+Per-chunk audio quality control using OpenAI Whisper. Catches dropped words, mispronunciations, language mismatches, and TTS loops *before* assembly so retries are scoped to the broken chunk only.
+
+### Pipeline placement
+
+```
+synthesize_audio_chunk (×N) → qc_audio_chunk (×N) → assemble_audio
+                                       │
+                                       ├─ all PASS  → continue to assemble
+                                       ├─ any REVIEW  → park run for human approval
+                                       └─ any FAIL    → delete WAV, re-render synth
+                                                        (max 3 attempts/chunk, then park)
+```
+
+Verdict thresholds (in [`shared/audio_qc.py`](factory_v2/shared/audio_qc.py)):
+- **PASS**: 0 issues after regex normalization (digits→words, contractions, hyphens, hallucination tails, etc.)
+- **REVIEW**: exactly 1 single-word issue (mispronunciation, drop, or insert)
+- **FAIL**: 2+ issues, multi-word run, language mismatch, or duration <40% / >250% of expected
+
+QC verdicts are written to `runtime.chunk_qc[i]` with full diff, transcript, and attempts count. The orchestrator hooks live in [`application/orchestrator.py`](factory_v2/application/orchestrator.py): `_maybe_fan_out_single_audio_qc`, `_evaluate_single_audio_qc`, `_retry_qc_failed_chunks`, `_park_run_for_qc_review`.
+
+### Enabling QC
+
+QC is **on by default**. The `local-qc` worker stack starts automatically alongside qwen/moss/image, `.venv-qc` is auto-provisioned by `./run_companion.sh`, and the orchestrator routes new jobs through `qc_audio_chunk` between synth and assembly. No env-var flipping or admin-UI toggle needed for normal use.
+
+To bypass QC (legacy synth-straight-to-assemble flow), set:
+
+```bash
+export FACTORY_QC_ENABLED=false
+./run_companion.sh
+```
+
+That keeps the worker process running but tells the orchestrator to skip the QC fan-in.
+
+### Tunables
+
+| env var | default | meaning |
+|---|---|---|
+| `FACTORY_QC_ENABLED` | `true` | set to `false` to bypass QC (synth → assemble directly) |
+| `FACTORY_QC_WHISPER_MODEL` | `turbo` | Whisper model size (`tiny`/`base`/`small`/`medium`/`large`/`turbo`) |
+| `FACTORY_QC_MAX_ATTEMPTS` | `3` | max auto-retries per chunk before parking |
+
+### Parked runs
+
+When a run parks (any REVIEW chunk, or any chunk past max attempts), `runtime.qc_park` is populated with the chunk indices and their verdicts, and `summary.qcParked = true`. The run stays in `running` state — admin must intervene (Phase 3 will add a UI; for now, manual unpark via `_ensure_step_enqueued("assemble_audio")` or re-running `_retry_qc_failed_chunks` after fixing the source script).
 
 ## Operational Notes
 

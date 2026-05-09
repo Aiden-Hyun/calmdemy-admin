@@ -565,6 +565,17 @@ class FirestoreStepRunRepo:
             merge=True,
         )
 
+    def delete(self, step_run_id: str) -> None:
+        """Delete a step-run document so the orchestrator can re-create it.
+
+        Used by the QC retry path: when a chunk's QC verdict is FAIL and we
+        want to re-render synth, we delete both the synth and QC step-runs
+        for that shard so the fan-out helpers see them as missing and
+        re-enqueue from scratch. The new ``ensure_ready`` call recreates
+        the doc with state='ready' and attempt=1.
+        """
+        self.db.collection("factory_step_runs").document(step_run_id).delete()
+
     def mark_retry_scheduled(
         self,
         step_run_id: str,

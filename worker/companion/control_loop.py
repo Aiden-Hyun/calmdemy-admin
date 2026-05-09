@@ -627,6 +627,7 @@ def _collect_auto_workload_from_payloads(
     Scans the factory step queue and counts outstanding steps per category:
       - non_tts_outstanding: script generation, formatting, upload, etc.
       - image_outstanding: image generation steps.
+      - qc_outstanding: audio QC steps (Whisper transcription).
       - tts_outstanding: per-model TTS step counts (e.g. {"qwen3-base": 3}).
       - wildcard_tts_outstanding: TTS steps with no specific model preference.
       - active_owners: set of worker IDs currently leasing a step.
@@ -638,6 +639,7 @@ def _collect_auto_workload_from_payloads(
     wildcard_tts_outstanding = 0
     non_tts_outstanding = 0
     image_outstanding = 0
+    qc_outstanding = 0
     active_owners: set[str] = set()
 
     for payload in queue_payloads:
@@ -656,6 +658,9 @@ def _collect_auto_workload_from_payloads(
         capability_key = capability_key_for_payload(payload)
         if capability_key == "image":
             image_outstanding += 1
+            continue
+        if capability_key == "qc":
+            qc_outstanding += 1
             continue
         if not capability_key.startswith("tts:"):
             non_tts_outstanding += 1
@@ -676,12 +681,14 @@ def _collect_auto_workload_from_payloads(
         "delete_jobs": False,
         "non_tts_outstanding": non_tts_outstanding,
         "image_outstanding": image_outstanding,
+        "qc_outstanding": qc_outstanding,
         "tts_outstanding": dict(tts_outstanding),
         "wildcard_tts_outstanding": wildcard_tts_outstanding,
         "active_owners": active_owners,
         "has_any_work": (
             non_tts_outstanding > 0
             or image_outstanding > 0
+            or qc_outstanding > 0
             or wildcard_tts_outstanding > 0
             or any(tts_outstanding.values())
         ),
@@ -716,6 +723,7 @@ def _collect_auto_workload(db) -> dict:
         or delete_jobs
         or workload["non_tts_outstanding"] > 0
         or workload["image_outstanding"] > 0
+        or workload.get("qc_outstanding", 0) > 0
         or workload["wildcard_tts_outstanding"] > 0
         or any(workload["tts_outstanding"].values())
     )
@@ -1037,6 +1045,20 @@ def _desired_auto_stack_ids(
             _pick_stack_ids(
                 image_candidates,
                 needed_count=min(1, len(image_candidates)),
+                running_ids=running_ids,
+                active_owners=active_owners,
+                selected_ids=desired_ids,
+            )
+        )
+
+    if workload.get("qc_outstanding", 0) > 0:
+        qc_candidates = [
+            stack for stack in enabled_stacks if "qc" in stack_capability_keys(stack)
+        ]
+        desired_ids.update(
+            _pick_stack_ids(
+                qc_candidates,
+                needed_count=min(1, len(qc_candidates)),
                 running_ids=running_ids,
                 active_owners=active_owners,
                 selected_ids=desired_ids,
