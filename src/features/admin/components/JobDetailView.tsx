@@ -99,6 +99,7 @@ type Props = {
   job: ContentJob;
   onUpdateTitle?: (title: string) => Promise<void>;
   onRegenerateSingleScript?: (script: string) => Promise<void>;
+  onSaveAndRestartSingleScript?: (script: string) => Promise<void>;
   factoryJob?: FactoryJob | null;
   factoryRun?: FactoryJobRun | null;
   executionView?: JobExecutionView | null;
@@ -206,6 +207,7 @@ export function JobDetailView({
   onReview,
   onUpdateTitle,
   onRegenerateSingleScript,
+  onSaveAndRestartSingleScript,
   layoutMode = 'fullscreen',
 }: Props) {
   const router = useRouter();
@@ -787,6 +789,7 @@ export function JobDetailView({
     onRequestThumbnail,
     onUpdateTitle,
     onRegenerateSingleScript,
+    onSaveAndRestartSingleScript,
   });
 
   const visibleSections = sections.filter((section) => section.shouldRender);
@@ -1333,6 +1336,7 @@ function buildSections(params: {
   onRequestThumbnail: () => void;
   onUpdateTitle?: (title: string) => Promise<void>;
   onRegenerateSingleScript?: (script: string) => Promise<void>;
+  onSaveAndRestartSingleScript?: (script: string) => Promise<void>;
 }) {
   const {
     job,
@@ -1376,6 +1380,7 @@ function buildSections(params: {
     onRequestThumbnail,
     onUpdateTitle,
     onRegenerateSingleScript,
+    onSaveAndRestartSingleScript,
   } = params;
 
   const hasCourseConcurrencyData = Boolean(
@@ -2519,11 +2524,19 @@ function buildSections(params: {
           generatedScript={job.generatedScript || ''}
           formattedScript={job.formattedScript || ''}
           canRegenerate={
-            Boolean(onRegenerateSingleScript) &&
-            (effectiveStatus === 'completed' || effectiveStatus === 'failed')
+            // Editable from any non-pristine state. Failed/completed → existing
+            // onRegenerate path (no cancellation needed). Anything else
+            // (pending, paused, all granular in-progress statuses like
+            // tts_converting) → onSaveAndRestart (cancels first, then redispatch).
+            (Boolean(onRegenerateSingleScript) &&
+              (effectiveStatus === 'completed' || effectiveStatus === 'failed')) ||
+            (Boolean(onSaveAndRestartSingleScript) &&
+              effectiveStatus !== 'completed' &&
+              effectiveStatus !== 'failed')
           }
-          isFailed={effectiveStatus === 'failed'}
+          effectiveStatus={effectiveStatus}
           onRegenerate={onRegenerateSingleScript}
+          onSaveAndRestart={onSaveAndRestartSingleScript}
           styles={styles}
           theme={theme}
         />
@@ -3073,16 +3086,18 @@ function EditableSingleScript({
   generatedScript,
   formattedScript,
   canRegenerate,
-  isFailed = false,
+  effectiveStatus,
   onRegenerate,
+  onSaveAndRestart,
   styles,
   theme,
 }: {
   generatedScript: string;
   formattedScript: string;
   canRegenerate: boolean;
-  isFailed?: boolean;
+  effectiveStatus?: string;
   onRegenerate?: (script: string) => Promise<void>;
+  onSaveAndRestart?: (script: string) => Promise<void>;
   styles: ReturnType<typeof createStyles>;
   theme: Theme;
 }) {
@@ -3096,23 +3111,55 @@ function EditableSingleScript({
     }
   }, [generatedScript, formattedScript, editing]);
 
+  const isFailed = effectiveStatus === 'failed';
+  const isCompleted = effectiveStatus === 'completed';
+  // Anything that isn't terminal needs the cancel-first path. JobStatus
+  // doesn't have a generic 'running' value — running jobs report granular
+  // statuses (tts_converting, llm_generating, etc.), 'pending' is "queued
+  // but not started", 'paused' is admin-paused. All of these go through
+  // onSaveAndRestart so the V2 run gets properly cancelled before redispatch.
+  const isInFlightOrPending =
+    Boolean(effectiveStatus) && !isFailed && !isCompleted;
+
+  // For failed jobs, hasChanges is always true (re-running a failure is the
+  // whole point even without script edits). For other states, require a
+  // genuine edit so the button can't accidentally restart an in-progress
+  // job with the same script.
   const displayScript = formattedScript || generatedScript;
   const hasChanges = editing && (
     isFailed || draft.trim() !== (generatedScript || formattedScript).trim()
   );
 
   const handleRegenerate = async () => {
-    if (!onRegenerate || !draft.trim()) return;
+    if (!draft.trim()) return;
+    // Pick the right server-side path for the current job state.
+    // onSaveAndRestart handles in-flight/pending/paused by composing the
+    // admin-cancel signal + reset-and-redispatch. onRegenerate is the
+    // legacy failed/completed path (no cancel needed).
+    const handler = isInFlightOrPending ? onSaveAndRestart : onRegenerate;
+    if (!handler) return;
     setRegenerating(true);
     try {
-      await onRegenerate(draft.trim());
+      await handler(draft.trim());
       setEditing(false);
     } catch (_e) {
-      Alert.alert('Error', 'Failed to regenerate. Please try again.');
+      Alert.alert('Error', 'Failed to apply changes. Please try again.');
     } finally {
       setRegenerating(false);
     }
   };
+
+  // Button label varies by state so the user knows what's about to happen.
+  const buttonLabel = (() => {
+    if (regenerating) {
+      if (isFailed) return 'Retrying...';
+      if (isCompleted) return 'Regenerating...';
+      return 'Saving...';
+    }
+    if (isFailed) return 'Save & Retry';
+    if (isCompleted) return 'Regenerate Audio';
+    return 'Save'; // running / pending / cancelled
+  })();
 
   if (!editing) {
     return (
@@ -3192,7 +3239,7 @@ function EditableSingleScript({
             color="#fff"
           />
           <Text style={{ fontFamily: 'DMSans-SemiBold', fontSize: 13, color: '#fff' }}>
-            {regenerating ? (isFailed ? 'Retrying...' : 'Regenerating...') : (isFailed ? 'Save & Retry' : 'Regenerate Audio')}
+            {buttonLabel}
           </Text>
         </Pressable>
         <Pressable

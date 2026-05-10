@@ -1650,7 +1650,13 @@ export async function saveAndRestartSingleContent(
   }
 
   const jobRef = doc(jobsCollection, job.id);
-  const isActiveRun = job.status === 'running' || job.status === 'pending';
+  // Anything that isn't a terminal status (completed/failed) might have an
+  // active V2 run that needs cancelling first. Includes 'pending' (just
+  // dispatched, V2 run row may already exist), all granular in-progress
+  // statuses (llm_generating, tts_converting, etc.), and 'paused'.
+  // If the V2 side has nothing active, recovery_manager.recover_admin_cancelled_runs
+  // will simply find nothing to do — write is defensively safe.
+  const isActiveRun = !['completed', 'failed'].includes(job.status);
 
   if (isActiveRun) {
     // Step 1: write the admin-cancel signal. Same shape as cancelJob() above.
@@ -1658,7 +1664,7 @@ export async function saveAndRestartSingleContent(
       status: 'failed',
       error: 'Cancelled to apply edited script',
       errorCode: 'cancelled_by_admin',
-      failedStage: job.status === 'running' ? 'running' : 'pending',
+      failedStage: job.status,
       runEndedAt: serverTimestamp(),
       lastRunStatus: 'failed',
       publishInProgress: false,
