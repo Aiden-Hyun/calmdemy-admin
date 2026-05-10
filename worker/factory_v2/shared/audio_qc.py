@@ -146,17 +146,24 @@ def normalize(text: str, *, is_source: bool) -> str:
     """Run the full regex normalization pipeline.
 
     Order is load-bearing:
-      1. Strip TTS-only markup (SSML, brackets, parens-aux) from source.
-      2. Strip Whisper hallucination tails from transcript.
-      3. Collapse ellipses to space.
-      4. Normalize OK/Ok/okay variants.
-      5. Expand acronyms (pre-lowercase to detect uppercase runs).
-      6. Expand numbers (digits, times, ordinals, currency).
-      7. Lowercase everything.
-      8. Expand contractions.
-      9. Fold hyphens (out-breath ≡ outbreath).
-     10. Drop remaining punctuation; collapse whitespace.
+      1. Fold Unicode apostrophe variants (U+2019, U+2018, U+02BC) to ASCII.
+         Whisper sometimes emits curly quotes; without this step, contraction
+         regexes match source-side (ASCII) but not transcript-side (curly),
+         creating fake "mispronunciation: 's' → 'us'" diffs everywhere.
+      2. Strip TTS-only markup (SSML, brackets, parens-aux) from source.
+      3. Strip Whisper hallucination tails from transcript.
+      4. Collapse ellipses to space.
+      5. Normalize OK/Ok/okay variants.
+      6. Expand acronyms (pre-lowercase to detect uppercase runs).
+      7. Expand numbers (digits, times, ordinals, currency).
+      8. Lowercase everything.
+      9. Expand contractions.
+     10. Fold hyphens (out-breath ≡ outbreath).
+     11. Drop remaining punctuation; collapse whitespace.
     """
+    # 1. Apostrophe normalization — must come before any regex that uses '.
+    text = text.replace("’", "'").replace("‘", "'").replace("ʼ", "'")
+
     if is_source:
         text = RE_SSML.sub(" ", text)
         text = RE_BRACKETED.sub(" ", text)

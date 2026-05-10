@@ -1188,10 +1188,12 @@ class Orchestrator:
 
         Outcomes (in priority order):
           1. Any chunk still pending QC → wait.
-          2. All PASS                  → enqueue ``assemble_audio``.
-          3. Any REVIEW                → park run for human approval (no auto-retry).
-          4. Any FAIL with attempts < 3 → delete WAV + re-enqueue synth for those chunks.
-          5. Any FAIL with attempts ≥ 3 → park run.
+          2. Any FAIL with attempts < 3 → delete WAV + re-enqueue synth for those
+             chunks. We retry first even when REVIEW chunks exist, because
+             retrying a real TTS error is cheap and may resolve it; parking
+             prematurely strands fixable problems behind unrelated REVIEWs.
+          3. Any REVIEW or any FAIL with attempts ≥ 3 → park run for human.
+          4. All PASS → enqueue ``assemble_audio``.
         """
         expected = list(enumerate(self._single_audio_chunk_shards(job)))
         if not expected:
@@ -1233,19 +1235,22 @@ class Orchestrator:
                 # Verdict missing or unknown — treat as still-pending and wait.
                 return
 
-        # Decision tree.
+        # Decision tree. Retry retryable FAILs first — that gives real TTS
+        # errors a chance to resolve before we park. Only park when there's
+        # nothing left to auto-fix (REVIEW needs human; exhausted FAIL means
+        # retries didn't help).
+        if fails_retryable:
+            self._retry_qc_failed_chunks(
+                fresh_job, job_id, run_id,
+                chunk_indexes=fails_retryable,
+            )
+            return
+
         if reviews or fails_exhausted:
             self._park_run_for_qc_review(
                 fresh_job, job_id, run_id,
                 reviews=reviews,
                 fails_exhausted=fails_exhausted,
-            )
-            return
-
-        if fails_retryable:
-            self._retry_qc_failed_chunks(
-                fresh_job, job_id, run_id,
-                chunk_indexes=fails_retryable,
             )
             return
 
