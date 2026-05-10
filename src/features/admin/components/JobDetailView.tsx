@@ -1016,6 +1016,34 @@ export function JobDetailView({
           />
         )}
 
+        {/*
+          Top-level "Save & Restart" — one-click cancel-and-redispatch
+          without forcing the user into the script editor. Only shows when:
+            * the job is non-terminal (something to cancel)
+            * a script exists on the job (something to redispatch with)
+            * the content type uses a single-content pipeline
+            * the upstream handler is wired
+          For edits, users can still use the in-editor Save button under
+          the Script section — that one accepts modifications. This top
+          button restarts with the current script as-is.
+        */}
+        {effectiveStatus !== 'completed' &&
+          effectiveStatus !== 'failed' &&
+          Boolean(onSaveAndRestartSingleScript) &&
+          SINGLE_SCRIPT_CONTENT_TYPES.has(job.contentType) &&
+          Boolean((job.generatedScript || job.formattedScript || '').trim()) && (
+            <PrimaryButton
+              label="Save & Restart"
+              icon="refresh-outline"
+              color={theme.colors.primary}
+              onPress={() => {
+                const script = (job.generatedScript || job.formattedScript || '').trim();
+                if (!script) return;
+                void onSaveAndRestartSingleScript(script);
+              }}
+            />
+          )}
+
         {effectiveStatus !== 'completed' && effectiveStatus !== 'failed' && (
           <Pressable
             style={({ pressed }) => [
