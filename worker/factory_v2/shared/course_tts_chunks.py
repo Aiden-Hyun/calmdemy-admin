@@ -31,7 +31,6 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import tempfile
 import wave
 from pathlib import Path
 
@@ -213,9 +212,35 @@ def parse_chunk_shard_key(shard_key: str) -> tuple[str, int] | None:
     return match.group(1), max(0, int(match.group(2)) - 1)
 
 
+def _chunks_root() -> Path:
+    """Base directory for all chunk WAV scratch files.
+
+    macOS aggressively cleans ``/var/folders/*/T/...`` (the default
+    ``tempfile.gettempdir()`` location) — under low-disk pressure or
+    automatic system maintenance, files there can disappear out from
+    under a long-running job. Chunk WAVs are *intermediate artifacts*
+    that the orchestrator expects to persist for the whole run, so they
+    can't live in cleanable temp space.
+
+    Default: ``<worker>/.tmp/chunks/`` (gitignored, but persistent).
+    Override with ``FACTORY_CHUNKS_DIR`` if you want a different mount
+    (e.g. fast SSD on a different volume).
+    """
+    override = os.getenv("FACTORY_CHUNKS_DIR", "").strip()
+    if override:
+        root = Path(override).expanduser().resolve()
+    else:
+        # __file__ → factory_v2/shared/course_tts_chunks.py.
+        # parents[2] → worker/. Anchor the chunk dir there so it lives
+        # alongside venvs/logs in a stable, version-controlled location.
+        root = Path(__file__).resolve().parents[2] / ".tmp" / "chunks"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def session_temp_dir(run_id: str, session_code: str) -> Path:
     """Return (and create) the temp directory for a course session's TTS chunks."""
-    root = Path(tempfile.gettempdir()) / "calmdemy_course_tts" / str(run_id).strip() / str(session_code).strip()
+    root = _chunks_root() / "course" / str(run_id).strip() / str(session_code).strip()
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -266,9 +291,11 @@ def single_content_temp_dir(run_id: str) -> Path:
     """Return (and create) the temp directory for single-content TTS chunks.
 
     Keyed by job ID (not run ID) so chunk WAVs persist across retries.
+    Anchored under ``_chunks_root()`` (not system tempdir) so macOS's
+    ``/var/folders/*/T/...`` cleanup can't wipe in-flight runs.
     """
     job_id = _job_id_from_run_id(run_id)
-    root = Path(tempfile.gettempdir()) / "calmdemy_single_tts" / job_id.strip()
+    root = _chunks_root() / "single" / job_id.strip()
     root.mkdir(parents=True, exist_ok=True)
     return root
 

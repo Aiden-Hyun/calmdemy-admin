@@ -20,6 +20,10 @@ worker/logs/
 worker/.local_worker.pid
 worker/.local_worker_*.pid
 
+# Persistent chunk WAV scratch space (replaces system tempdir; see
+# course_tts_chunks._chunks_root for rationale).
+worker/.tmp/
+
 # Downloaded/cached model weights
 worker/.models/
 
