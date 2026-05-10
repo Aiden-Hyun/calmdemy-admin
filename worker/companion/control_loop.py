@@ -585,16 +585,73 @@ def _queue_payload_counts_as_live_work(
     now: datetime,
 ) -> bool:
     """
-    Determine if a queue entry represents genuine in-progress or pending work.
+    Determine if a queue entry represents work the autoscaler should react to.
 
-    A step that's "leased" or "running" only counts if its owner worker has
-    a fresh heartbeat — otherwise the worker likely crashed and the step is
-    orphaned (the recovery manager will handle it separately).  "ready"
-    steps always count because they're waiting for a worker to pick them up.
+    Counts:
+      - ``ready``  — waiting for any worker
+      - ``leased`` / ``running`` with a healthy owner heartbeat that's on
+        this specific item (or grace-period recent) — being processed
+      - ``leased`` / ``running`` with **no owner** or with a **stale owner
+        heartbeat** (worker died) — needs a replacement worker. Without
+        counting this case, a worker death silently strands its in-flight
+        items until the lease expires (minutes), and any capability-
+        specific stack whose only work is dead-leased items looks like it
+        has zero outstanding work and never gets respawned.
+
+    Doesn't count:
+      - terminal states (succeeded / failed / cancelled)
+      - leased/running orphans whose owner *is* alive but processing
+        something else and the item itself is stale — recovery will
+        reset to ``ready`` and the existing healthy worker will pick
+        it up; no need to spawn extra capacity.
     """
     state = str(payload.get("state") or "").strip().lower()
     if state == "ready":
         return True
+    if state not in {"leased", "running"}:
+        return False
+
+    owner = str(payload.get("lease_owner") or "").strip()
+    if not owner:
+        # No recorded owner — orphaned. Count so a worker can pick it up
+        # after recovery resets the lease.
+        return True
+
+    status = worker_status_by_id.get(owner)
+    if not _worker_status_heartbeat_is_fresh(status, now):
+        # Owner heartbeat is stale → worker is dead. The item is orphaned
+        # and needs a replacement worker.
+        return True
+
+    # Owner is alive. Is it actually on THIS item?
+    queue_id = str(payload.get("_queue_id") or "").strip()
+    current_queue_id = str((status or {}).get("currentQueueId") or "").strip()
+    if queue_id and current_queue_id == queue_id:
+        return True
+    if current_queue_id:
+        # Worker is healthy but on a different item. This item is a stale
+        # orphan; recovery will reset it and the same healthy worker can
+        # pick it up. No need to count it as needing fresh capacity.
+        return False
+    # No currentQueueId set on worker_status — fall back to recency window
+    # (covers the brief gap between claim and first heartbeat).
+    return _queue_payload_is_recent(payload, now)
+
+
+def _queue_payload_owner_is_alive(
+    payload: dict,
+    *,
+    worker_status_by_id: dict[str, dict],
+    now: datetime,
+) -> bool:
+    """
+    True iff a healthy worker is currently processing this queue item.
+
+    Used to populate ``active_owners`` (workers the memory guard must not
+    evict) — orthogonal to whether the item *needs* a worker (which
+    ``_queue_payload_counts_as_live_work`` answers).
+    """
+    state = str(payload.get("state") or "").strip().lower()
     if state not in {"leased", "running"}:
         return False
 
@@ -651,9 +708,17 @@ def _collect_auto_workload_from_payloads(
         ):
             continue
 
-        lease_owner = str(payload.get("lease_owner") or "").strip()
-        if state in {"leased", "running"} and lease_owner:
-            active_owners.add(lease_owner)
+        # Track active_owners only for items whose owner is *actually alive*.
+        # Items leased to a dead worker should not protect that worker from
+        # eviction (it's already dead) and shouldn't suppress respawn either.
+        if _queue_payload_owner_is_alive(
+            payload,
+            worker_status_by_id=worker_status_by_id,
+            now=now,
+        ):
+            lease_owner = str(payload.get("lease_owner") or "").strip()
+            if lease_owner:
+                active_owners.add(lease_owner)
 
         capability_key = capability_key_for_payload(payload)
         if capability_key == "image":

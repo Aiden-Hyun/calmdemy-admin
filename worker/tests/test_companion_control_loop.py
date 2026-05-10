@@ -56,6 +56,42 @@ class CompanionControlLoopTests(unittest.TestCase):
         self.assertEqual(workload["image_outstanding"], 0)
         self.assertEqual(workload["active_owners"], set())
 
+    def test_collect_auto_workload_counts_dead_worker_lease_as_outstanding(self) -> None:
+        """Items leased to a worker with a stale heartbeat must count as
+        outstanding so the autoscaler spawns a replacement. Otherwise a
+        crashed worker silently strands its in-flight items until lease
+        expiry (minutes) and the capability-specific stack never respawns.
+        Regression for 'qc stuck after worker died mid-run' bug."""
+        now = datetime(2026, 5, 10, 8, 30, tzinfo=timezone.utc)
+        workload = _collect_auto_workload_from_payloads(
+            [
+                {
+                    "_queue_id": "dead-leased-qc-1",
+                    "state": "leased",
+                    "step_name": "qc_audio_chunk",
+                    "capability_key": "qc",
+                    "lease_owner": "local-qc",
+                    "updated_at": now - timedelta(minutes=3),
+                    "step_started_at": now - timedelta(minutes=3),
+                },
+            ],
+            worker_status_by_id={
+                # Worker hasn't heartbeated in 10 min — dead.
+                "local-qc": {
+                    "workerId": "local-qc",
+                    "lastHeartbeat": now - timedelta(minutes=10),
+                }
+            },
+            now=now,
+        )
+
+        self.assertEqual(workload["qc_outstanding"], 1)
+        # Dead worker must NOT be in active_owners — that would protect it
+        # from eviction (no point — it's already gone) and could suppress
+        # legitimate respawn logic.
+        self.assertEqual(workload["active_owners"], set())
+        self.assertTrue(workload["has_any_work"])
+
     def test_collect_auto_workload_keeps_recent_running_queue_during_startup_grace(self) -> None:
         now = datetime(2026, 3, 22, 9, 45, tzinfo=timezone.utc)
         workload = _collect_auto_workload_from_payloads(
