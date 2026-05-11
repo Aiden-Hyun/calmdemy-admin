@@ -1068,9 +1068,20 @@ class Orchestrator:
             )
 
     def _maybe_enqueue_single_audio_assembly(
-        self, job: dict, job_id: str, run_id: str,
+        self,
+        job: dict,
+        job_id: str,
+        run_id: str,
+        just_succeeded_shard: str | None = None,
     ) -> bool:
-        """Enqueue ``assemble_audio`` once all chunk shards have succeeded."""
+        """Enqueue ``assemble_audio`` once all chunk shards have succeeded.
+
+        ``just_succeeded_shard`` lets the on_step_success caller close the
+        Firestore eventual-consistency race for the *last* chunk: the
+        index-backed ``succeeded_shard_keys`` query may not see the
+        write that triggered this hook. See
+        ``_maybe_fan_out_single_audio_qc`` for the full explanation.
+        """
         expected = set(self._single_audio_chunk_shards(job))
         if not expected:
             return False
@@ -1084,6 +1095,8 @@ class Orchestrator:
         succeeded = self.step_run_repo.succeeded_shard_keys(
             job_id, run_id, SINGLE_AUDIO_CHUNK_STEP,
         )
+        if just_succeeded_shard:
+            succeeded = succeeded | {just_succeeded_shard}
         if not expected.issubset(succeeded):
             return False
 
@@ -1095,7 +1108,11 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     def _maybe_fan_out_single_audio_qc(
-        self, job: dict, job_id: str, run_id: str,
+        self,
+        job: dict,
+        job_id: str,
+        run_id: str,
+        just_succeeded_shard: str | None = None,
     ) -> bool:
         """Fan out QC for every chunk once all synth chunks have succeeded.
 
@@ -1128,6 +1145,17 @@ class Orchestrator:
         succeeded = self.step_run_repo.succeeded_shard_keys(
             job_id, run_id, SINGLE_AUDIO_CHUNK_STEP,
         )
+        # Race fix: Firestore `where("state", "==", "succeeded")` queries are
+        # eventually consistent — the index lags the document write by
+        # ~50–500 ms. When the LAST chunk's on_step_success fires immediately
+        # after mark_succeeded for that same shard, the query may return
+        # only N-1 of N succeeded chunks. Without compensating, the fan-out
+        # silently drops because issubset() returns False, and since this
+        # was the last completion there's no future trigger to retry.
+        # We KNOW the just-succeeded shard is succeeded (we're being called
+        # in its on_step_success hook), so union it in.
+        if just_succeeded_shard:
+            succeeded = succeeded | {just_succeeded_shard}
         if not expected_set.issubset(succeeded):
             return False
 
@@ -1669,11 +1697,18 @@ class Orchestrator:
 
             if step_name == SINGLE_AUDIO_CHUNK_STEP:
                 # A chunk finished. With QC enabled, route through QC fan-out
-                # before assembly. Without QC, go straight to assembly.
+                # before assembly. Without QC, go straight to assembly. Pass
+                # the just-completed shard down so the fan-in helper can
+                # close the Firestore eventual-consistency race when this is
+                # the LAST chunk.
                 if _qc_enabled():
-                    self._maybe_fan_out_single_audio_qc(job, job_id, run_id)
+                    self._maybe_fan_out_single_audio_qc(
+                        job, job_id, run_id, just_succeeded_shard=shard_key,
+                    )
                 else:
-                    self._maybe_enqueue_single_audio_assembly(job, job_id, run_id)
+                    self._maybe_enqueue_single_audio_assembly(
+                        job, job_id, run_id, just_succeeded_shard=shard_key,
+                    )
                 return
 
             if step_name == SINGLE_AUDIO_QC_STEP:
