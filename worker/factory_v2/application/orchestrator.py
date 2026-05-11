@@ -454,6 +454,12 @@ class Orchestrator:
         # (audio, publish) are handled by the orchestrator dynamically.
         pipeline_order = ["generate_script", "format_script", "generate_image"]
 
+        # Collect entries first, then commit in one Firestore batch. The
+        # previous serial pattern (ensure_ready + mark_succeeded_from_checkpoint
+        # per step) cost two round-trips per reused step — for a heavily-
+        # retried job that's the dominant restart latency. See
+        # batch_mark_succeeded_from_checkpoint for details.
+        entries: list[tuple[str, str, str, str, dict]] = []
         for step_name in pipeline_order:
             # Stop seeding once we reach the step we're about to execute.
             if step_name == first_step:
@@ -464,25 +470,23 @@ class Orchestrator:
                 pass  # fall through to checkpoint it below
             if not checkpointable.get(step_name):
                 continue
-            step_run_id = self.step_run_repo.ensure_ready(job_id, run_id, step_name)
-            self.step_run_repo.mark_succeeded_from_checkpoint(
-                step_run_id,
-                {"reused_from_checkpoint": True},
-            )
+            entries.append((job_id, run_id, step_name, "root", {"reused_from_checkpoint": True}))
 
         # For _resume_after_image, also checkpoint generate_image itself.
         if (
             first_step == self._SINGLE_CONTENT_RESUME_AFTER_IMAGE
             and checkpointable.get("generate_image")
         ):
-            step_run_id = self.step_run_repo.ensure_ready(job_id, run_id, "generate_image")
-            self.step_run_repo.mark_succeeded_from_checkpoint(
-                step_run_id,
+            entries.append((
+                job_id, run_id, "generate_image", "root",
                 {
                     "reused_from_checkpoint": True,
                     "thumbnail_url": str(runtime.get("thumbnail_url") or ""),
                 },
-            )
+            ))
+
+        if entries:
+            self.step_run_repo.batch_mark_succeeded_from_checkpoint(entries)
 
     def _seed_course_checkpoint_steps(
         self,
@@ -511,35 +515,26 @@ class Orchestrator:
         }:
             return
 
+        # Same batched-write pattern as the single-content checkpoint seed
+        # above. Combines up to two writes into one Firestore round-trip.
+        entries: list[tuple[str, str, str, str, dict]] = []
+
         thumbnail_url = self._course_thumbnail_url(job)
         thumbnail_regeneration_requested = self._course_thumbnail_generation_requested(job)
         if thumbnail_url and not thumbnail_regeneration_requested:
-            step_run_id = self.step_run_repo.ensure_ready(
-                job_id,
-                run_id,
-                "generate_course_thumbnail",
-            )
-            self.step_run_repo.mark_succeeded_from_checkpoint(
-                step_run_id,
-                {
-                    "reused_from_checkpoint": True,
-                    "thumbnail_url": thumbnail_url,
-                },
-            )
+            entries.append((
+                job_id, run_id, "generate_course_thumbnail", "root",
+                {"reused_from_checkpoint": True, "thumbnail_url": thumbnail_url},
+            ))
 
         if self._course_has_uploaded_audio(job):
-            upload_step_run_id = self.step_run_repo.ensure_ready(
-                job_id,
-                run_id,
-                "upload_course_audio",
-            )
-            self.step_run_repo.mark_succeeded_from_checkpoint(
-                upload_step_run_id,
-                {
-                    "reused_from_checkpoint": True,
-                    "audio_reused": True,
-                },
-            )
+            entries.append((
+                job_id, run_id, "upload_course_audio", "root",
+                {"reused_from_checkpoint": True, "audio_reused": True},
+            ))
+
+        if entries:
+            self.step_run_repo.batch_mark_succeeded_from_checkpoint(entries)
 
     @staticmethod
     def _completed_course_audio_shards(job: dict) -> set[str]:
@@ -823,23 +818,18 @@ class Orchestrator:
 
         if completed_shards:
             # Surface checkpoint-reused shards in this run's timeline so UI does not
-            # show them as "waiting" when they are already completed.
-            for shard in COURSE_AUDIO_SHARDS:
-                if shard not in completed_shards:
-                    continue
-                step_run_id = self.step_run_repo.ensure_ready(
-                    job_id,
-                    run_id,
-                    "synthesize_course_audio",
-                    shard_key=shard,
+            # show them as "waiting" when they are already completed. Batched
+            # write so 9 shard re-mark = 1 Firestore round-trip (was 18 serial).
+            entries: list[tuple[str, str, str, str, dict]] = [
+                (
+                    job_id, run_id, "synthesize_course_audio", shard,
+                    {"reused_from_checkpoint": True, "session_code": shard},
                 )
-                self.step_run_repo.mark_succeeded_from_checkpoint(
-                    step_run_id,
-                    {
-                        "reused_from_checkpoint": True,
-                        "session_code": shard,
-                    },
-                )
+                for shard in COURSE_AUDIO_SHARDS
+                if shard in completed_shards
+            ]
+            if entries:
+                self.step_run_repo.batch_mark_succeeded_from_checkpoint(entries)
 
         missing_shards = [shard for shard in COURSE_AUDIO_SHARDS if shard not in completed_shards]
 

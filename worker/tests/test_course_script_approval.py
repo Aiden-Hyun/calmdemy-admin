@@ -155,6 +155,18 @@ class _ConfigurableStepRunRepo:
         if payload:
             self._succeeded.add(payload)
 
+    def batch_mark_succeeded_from_checkpoint(
+        self,
+        entries: list[tuple[str, str, str, str, dict]],
+    ) -> None:
+        # Batched equivalent of ensure_ready + mark_succeeded_from_checkpoint.
+        # Mirrors the production semantics in firestore_repos.py so tests
+        # remain valid against the optimized callsites in orchestrator.py.
+        for job_id, run_id, step_name, shard_key, _output in entries:
+            step_run_id = f"{run_id}__{step_name}__{shard_key}"
+            self._ready[step_run_id] = (job_id, run_id, step_name)
+            self._succeeded.add((job_id, run_id, step_name))
+
 
 class CourseScriptApprovalTests(unittest.TestCase):
     def test_initial_course_script_approval_pauses_after_script_generation(self) -> None:
