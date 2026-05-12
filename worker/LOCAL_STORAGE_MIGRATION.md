@@ -96,8 +96,8 @@ If Phase 1 reveals a fundamental flaw in the dual-write approach, we find out wi
 - [x] Design SQLite schema for `factory_events` (column types, indexes)
 - [x] Implement `SqliteEventRepo`
 - [x] Unit tests: SQLite parity (9 tests)
-- [ ] Implement `DualEventRepo` wrapper
-- [ ] Unit tests: dual-write semantics + mirror failure tolerance
+- [x] Implement `DualEventRepo` wrapper + generic `MirrorDispatcher`
+- [x] Unit tests: dual-write semantics + mirror failure tolerance (13 tests)
 - [ ] Add env-var driven composition in `local_worker.py` / `local_companion.py`
 - [ ] Integration test: run a job end-to-end with `FACTORY_STORAGE_EVENTS=dual`
 - [ ] Compare SQLite vs Firestore event counts after a few runs — they should match exactly
@@ -150,6 +150,11 @@ Mostly straightforward — small state, low volume. Save for last because it's l
 - **`check_same_thread=False` + a Python lock is simpler than per-thread connections.** The worker has 3 threads that emit (main poll loop, watchdog, recovery sweep). A single connection with a lock is cleaner than threading.local() and we don't pay for cross-thread coordination in SQLite itself.
 - **`ensure_ascii=False` in JSON encoding is important.** Meditation scripts contain Korean / Japanese text. Default JSON encoding would store them as `\uXXXX` escapes — ugly when grepping the db. Pinned by test.
 - **Schema bootstrap via `CREATE IF NOT EXISTS` is the right pattern.** Idempotent on every boot. Future phases can append their own tables to the same schema string.
+- **Generic `MirrorDispatcher` pays off immediately.** Built as a separate class composed by `DualEventRepo` rather than baked into it. Future phases (step_runs, queue) get the same bounded-queue, drop-oldest, daemon-thread, failure-tolerant behavior for free.
+- **Drop OLDEST on overflow, not newest.** When Firestore is slow and the queue fills up, the *recent* events are usually the most diagnostically valuable. Pinned by test (`test_queue_overflow_drops_oldest`) — `i=9` (newest) must reach the mirror even after dropping several earlier events.
+- **Daemon thread + `close()` flush handles both lifecycles.** Production SIGTERM: daemon dies, last few events lost (audit log; acceptable). Tests / graceful shutdown: `close()` blocks until queue drains. Both modes work without conditional logic in the consumer.
+- **Pin async-ness with a timing assertion.** `test_slow_mirror_does_not_slow_primary_path` — 5 emits against a 500ms-per-call mirror complete in <200ms total. Catches accidental refactors that wait on the mirror.
+- **Counter atomicity in CPython.** `_drops`, `_failures`, `_success` are integers; `x += 1` is atomic enough on CPython (GIL serializes the bytecode). No lock needed for metrics. Documented in code so future-me doesn't add unnecessary locking.
 
 ---
 
