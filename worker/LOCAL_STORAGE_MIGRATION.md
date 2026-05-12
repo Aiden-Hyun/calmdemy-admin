@@ -93,12 +93,12 @@ If Phase 1 reveals a fundamental flaw in the dual-write approach, we find out wi
 
 ### Subtasks (mark as we go)
 
-- [ ] Design SQLite schema for `factory_events` (column types, indexes)
-- [ ] Implement `SqliteEventRepo`
+- [x] Design SQLite schema for `factory_events` (column types, indexes)
+- [x] Implement `SqliteEventRepo`
+- [x] Unit tests: SQLite parity (9 tests)
 - [ ] Implement `DualEventRepo` wrapper
-- [ ] Add env-var driven composition in `local_worker.py` / `local_companion.py`
-- [ ] Unit tests: SQLite parity
 - [ ] Unit tests: dual-write semantics + mirror failure tolerance
+- [ ] Add env-var driven composition in `local_worker.py` / `local_companion.py`
 - [ ] Integration test: run a job end-to-end with `FACTORY_STORAGE_EVENTS=dual`
 - [ ] Compare SQLite vs Firestore event counts after a few runs — they should match exactly
 - [ ] Flip default to `dual` once we have confidence
@@ -146,7 +146,10 @@ Mostly straightforward — small state, low volume. Save for last because it's l
 *(empty for now — populate after each phase)*
 
 ### Phase 1 lessons
-- _(to be filled in)_
+- **Picking the right SQLite PRAGMAs matters.** `journal_mode=WAL` is non-negotiable for our multi-worker setup (writers don't block readers, writers don't block other writers on different rows). `synchronous=NORMAL` is the right speed/safety tradeoff for an audit log; `FULL` would be 10× slower for negligible safety gain on append-only data.
+- **`check_same_thread=False` + a Python lock is simpler than per-thread connections.** The worker has 3 threads that emit (main poll loop, watchdog, recovery sweep). A single connection with a lock is cleaner than threading.local() and we don't pay for cross-thread coordination in SQLite itself.
+- **`ensure_ascii=False` in JSON encoding is important.** Meditation scripts contain Korean / Japanese text. Default JSON encoding would store them as `\uXXXX` escapes — ugly when grepping the db. Pinned by test.
+- **Schema bootstrap via `CREATE IF NOT EXISTS` is the right pattern.** Idempotent on every boot. Future phases can append their own tables to the same schema string.
 
 ---
 
