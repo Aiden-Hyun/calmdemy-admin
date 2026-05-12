@@ -218,3 +218,67 @@ class DualEventRepo:
         """Stop the dispatcher. Does NOT close the underlying primary or
         mirror — the composition root owns those lifecycles."""
         self._dispatcher.close()
+
+
+# ----------------------- factory functions -----------------------
+# These let the composition root (worker_main.py / local_companion.py)
+# pick a backend per collection via env var without knowing about each
+# implementation. Adding a new mode is a one-line change.
+
+import os
+
+
+def make_event_repo(db, storage_mode: str | None = None):
+    """Construct the events repo according to ``FACTORY_STORAGE_EVENTS``.
+
+    Modes:
+      - ``firestore`` (default): the legacy ``FirestoreEventRepo``. No
+        change from pre-migration behavior — this is what every worker
+        does today.
+      - ``sqlite``: SqliteEventRepo only, no Firestore mirror. Admin UI
+        loses the events feed; useful only for offline / dev.
+      - ``dual``: ``DualEventRepo`` wrapping SQLite primary + Firestore
+        mirror. Worker reads/writes hit SQLite (fast, consistent),
+        Firestore continues receiving the same writes asynchronously so
+        the admin UI keeps working.
+
+    Args:
+        db: Firestore client. Required for ``firestore`` and ``dual``
+            modes; ignored for ``sqlite``.
+        storage_mode: Override the env var. Mainly for tests.
+
+    Returns:
+        An object implementing ``emit(event_type, job_id, run_id, payload)
+        -> str``. Caller doesn't need to know which backend.
+    """
+    # Lazy imports keep this module importable even on workers that
+    # don't have firebase_admin installed (e.g. a future pure-SQLite
+    # stack).
+    if storage_mode is None:
+        storage_mode = os.getenv("FACTORY_STORAGE_EVENTS", "firestore").strip().lower()
+
+    if storage_mode == "sqlite":
+        from .sqlite_repos import SqliteEventRepo
+        logger.info("events repo: sqlite-only (no Firestore mirror)")
+        return SqliteEventRepo()
+
+    if storage_mode == "dual":
+        from .firestore_repos import FirestoreEventRepo
+        from .sqlite_repos import SqliteEventRepo
+        logger.info("events repo: dual (SQLite primary + Firestore mirror)")
+        return DualEventRepo(
+            primary=SqliteEventRepo(),
+            mirror=FirestoreEventRepo(db),
+        )
+
+    # Default / unknown values fall through to Firestore-only with a
+    # log line. "Unknown" is intentionally not a hard error — if a
+    # plist had a typo, we'd rather keep the worker running than crash
+    # at startup.
+    if storage_mode != "firestore":
+        logger.warning(
+            "unrecognized FACTORY_STORAGE_EVENTS=%r; defaulting to firestore",
+            storage_mode,
+        )
+    from .firestore_repos import FirestoreEventRepo
+    return FirestoreEventRepo(db)

@@ -98,7 +98,8 @@ If Phase 1 reveals a fundamental flaw in the dual-write approach, we find out wi
 - [x] Unit tests: SQLite parity (9 tests)
 - [x] Implement `DualEventRepo` wrapper + generic `MirrorDispatcher`
 - [x] Unit tests: dual-write semantics + mirror failure tolerance (13 tests)
-- [ ] Add env-var driven composition in `local_worker.py` / `local_companion.py`
+- [x] `make_event_repo()` factory + composition root wiring in `worker_main.py`
+- [x] Factory tests: env-var dispatch, unknown values, case sensitivity (7 tests)
 - [ ] Integration test: run a job end-to-end with `FACTORY_STORAGE_EVENTS=dual`
 - [ ] Compare SQLite vs Firestore event counts after a few runs — they should match exactly
 - [ ] Flip default to `dual` once we have confidence
@@ -155,6 +156,9 @@ Mostly straightforward — small state, low volume. Save for last because it's l
 - **Daemon thread + `close()` flush handles both lifecycles.** Production SIGTERM: daemon dies, last few events lost (audit log; acceptable). Tests / graceful shutdown: `close()` blocks until queue drains. Both modes work without conditional logic in the consumer.
 - **Pin async-ness with a timing assertion.** `test_slow_mirror_does_not_slow_primary_path` — 5 emits against a 500ms-per-call mirror complete in <200ms total. Catches accidental refactors that wait on the mirror.
 - **Counter atomicity in CPython.** `_drops`, `_failures`, `_success` are integers; `x += 1` is atomic enough on CPython (GIL serializes the bytecode). No lock needed for metrics. Documented in code so future-me doesn't add unnecessary locking.
+- **Default-firestore is the safety guarantee.** The `make_event_repo` factory defaults to `firestore` when the env var is unset, so landing this code touches zero runtime behavior. Pinned by `test_default_returns_firestore_event_repo` — that test is the contract for "this commit is safe to deploy without flipping anything."
+- **Unknown env-var values fall through, not crash.** A typo in the plist (e.g. `dual_sqlite` instead of `dual`) shouldn't bring the worker down at boot. The factory logs a warning and uses Firestore. Pinned by `test_unknown_mode_falls_back_to_firestore_with_warning`.
+- **Env-var dispatch is lower-cased; explicit `storage_mode=` is not.** Real config sources (plist, .env files) often have inconsistent casing. The env-var path normalizes to lowercase. Explicit calls (only tests) stay strict so we don't accidentally hide a bug.
 
 ---
 
