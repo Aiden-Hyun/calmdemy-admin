@@ -100,9 +100,9 @@ If Phase 1 reveals a fundamental flaw in the dual-write approach, we find out wi
 - [x] Unit tests: dual-write semantics + mirror failure tolerance (13 tests)
 - [x] `make_event_repo()` factory + composition root wiring in `worker_main.py`
 - [x] Factory tests: env-var dispatch, unknown values, case sensitivity (7 tests)
-- [ ] Integration test: run a job end-to-end with `FACTORY_STORAGE_EVENTS=dual`
-- [ ] Compare SQLite vs Firestore event counts after a few runs — they should match exactly
-- [ ] Flip default to `dual` once we have confidence
+- [x] Integration test: dual mode with real SQLite + fake Firestore mirror (5 tests)
+- [ ] Validate on a real run: flip `FACTORY_STORAGE_EVENTS=dual` in plist, kick a meditation job, compare SQLite vs Firestore event counts — must match exactly
+- [ ] Flip default to `dual` once we have a few successful runs
 - [ ] Document operational checks (how to inspect events.db, how to detect mirror lag)
 
 ### Validation checkpoints
@@ -159,6 +159,8 @@ Mostly straightforward — small state, low volume. Save for last because it's l
 - **Default-firestore is the safety guarantee.** The `make_event_repo` factory defaults to `firestore` when the env var is unset, so landing this code touches zero runtime behavior. Pinned by `test_default_returns_firestore_event_repo` — that test is the contract for "this commit is safe to deploy without flipping anything."
 - **Unknown env-var values fall through, not crash.** A typo in the plist (e.g. `dual_sqlite` instead of `dual`) shouldn't bring the worker down at boot. The factory logs a warning and uses Firestore. Pinned by `test_unknown_mode_falls_back_to_firestore_with_warning`.
 - **Env-var dispatch is lower-cased; explicit `storage_mode=` is not.** Real config sources (plist, .env files) often have inconsistent casing. The env-var path normalizes to lowercase. Explicit calls (only tests) stay strict so we don't accidentally hide a bug.
+- **The integration test uses REAL SQLite, FAKE Firestore.** Halfway between unit and full e2e. SQLite is cheap to spin up per-test (`tempfile.TemporaryDirectory`), Firestore is not. Confidence-cost ratio is high — we exercise the actual SQLite implementation, schema, file I/O, but don't need network access or service-account credentials.
+- **"Default mode never touches SQLite" is a safety test, not just a behavior test.** Pinning that the SQLite file does not exist after a default-mode emit means deploying this code can't accidentally start dual-writing on a machine where the operator hasn't opted in. Tests like this one protect the "land code, don't change behavior" contract.
 
 ---
 
