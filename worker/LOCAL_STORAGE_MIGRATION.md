@@ -2,8 +2,9 @@
 
 Living tracking document for the incremental migration of V2 internal state from Firestore to local SQLite. Each phase is independently shippable and the system keeps working after every one.
 
-> **Status: Phase 0 (planning) — no migration code shipped yet.**
-> Last updated: 2026-05-11
+> **Status: Phase 1 code complete — pending real-run validation before flipping default.**
+> All Phase 1 code is merged + tested + safe to deploy. Default remains `firestore`; flip `FACTORY_STORAGE_EVENTS=dual` to opt in.
+> Last updated: 2026-05-12
 
 ---
 
@@ -53,8 +54,8 @@ Three implications:
 
 | Phase | Collection | Status | Why this order | Estimated effort |
 |---|---|---|---|---|
-| **1** | `factory_events` | 🔵 NEXT | Safest. Append-only, no reads in hot path, failures are non-fatal (audit log). Proves the dual-write pattern. | ~400 LOC, ~1 day |
-| **2** | `factory_step_runs` | ⏳ | Fixes the consistency race class of bugs we keep hitting. The hot path. | ~600 LOC, ~2 days |
+| **1** | `factory_events` | 🟢 CODE DONE, pending real-run validation | Safest. Append-only, no reads in hot path, failures are non-fatal (audit log). Proves the dual-write pattern. | ~1500 LOC shipped (4 commits) |
+| **2** | `factory_step_runs` | 🔵 NEXT | Fixes the consistency race class of bugs we keep hitting. The hot path. | ~600 LOC, ~2 days |
 | **3** | `factory_step_queue` | ⏳ | Atomic claim semantics. Highest risk. Biggest throughput win. | ~800 LOC, ~3 days |
 | **4** | `worker_status` | ⏳ | Heartbeats. Tightly local. Could fix recovery sweep flakiness. | ~300 LOC, ~1 day |
 | **5** | `factory_jobs.runtime` | ⏳ | Big accumulator. Many writes per run. | ~500 LOC, ~2 days |
@@ -78,18 +79,36 @@ Three implications:
 
 If Phase 1 reveals a fundamental flaw in the dual-write approach, we find out without breaking the pipeline.
 
-### What changes
+### Commits
 
-| File | Change |
+In sequence (read the diffs in this order to understand the build):
+
+| Step | Commit | What landed |
+|---|---|---|
+| Plan | [`924308fd`](https://github.com/Aiden-Hyun/calmdemy-admin/commit/924308fd) | This doc — initial planning. |
+| 1 | [`3f1a47a0`](https://github.com/Aiden-Hyun/calmdemy-admin/commit/3f1a47a0) | `SqliteEventRepo` (inline schema) + 9 parity tests. No wiring. |
+| 2 | [`896f508c`](https://github.com/Aiden-Hyun/calmdemy-admin/commit/896f508c) | `DualEventRepo` + generic `MirrorDispatcher` + 13 dual-write tests. No wiring. |
+| 3 | [`a35c7ea6`](https://github.com/Aiden-Hyun/calmdemy-admin/commit/a35c7ea6) | `make_event_repo` factory + composition root wiring (`worker_main.py`) + 7 factory tests. **Default still firestore — zero runtime change.** |
+| 4 | [`d5368c18`](https://github.com/Aiden-Hyun/calmdemy-admin/commit/d5368c18) | End-to-end integration tests (real SQLite + fake Firestore) + 5 integration tests. |
+
+### What was actually built (code map)
+
+| File | What it does |
 |---|---|
-| `factory_v2/infrastructure/sqlite_repos.py` (NEW) | `SqliteEventRepo` with the same interface as `FirestoreEventRepo`. SQLite schema with indexes on `job_id`, `run_id`, `emitted_at`. |
-| `factory_v2/infrastructure/dual_repos.py` (NEW) | `DualEventRepo(primary, mirror)` wrapper. Writes go to primary first (transactional), then mirror (fire-and-forget thread or queue). |
-| `factory_v2/infrastructure/firestore_repos.py` | No change. |
-| `local_worker.py` + `local_companion.py` | Composition root reads `FACTORY_STORAGE_EVENTS` env var; instantiates `FirestoreEventRepo`, `SqliteEventRepo`, or `DualEventRepo`. Default: `firestore` (no change). |
-| `factory_v2/infrastructure/schema/events.sql` (NEW) | DDL for the events table. |
-| `tests/test_sqlite_event_repo.py` (NEW) | Parity tests — same fixtures as the Firestore implementation passes. |
-| `tests/test_dual_event_repo.py` (NEW) | Tests that writes go to both backends and reads come from primary; mirror failures don't crash. |
-| `.gitignore` | `worker/.tmp/factory.db*` (already covered by `worker/.tmp/`). |
+| [`factory_v2/infrastructure/sqlite_repos.py`](factory_v2/infrastructure/sqlite_repos.py) | `SqliteEventRepo`. Inline schema (no separate `.sql` file — `CREATE TABLE IF NOT EXISTS` on init). WAL mode, `synchronous=NORMAL`, `check_same_thread=False` + Python lock. Default db path: `worker/.tmp/factory.db` (override via `FACTORY_DB_PATH`). |
+| [`factory_v2/infrastructure/dual_repos.py`](factory_v2/infrastructure/dual_repos.py) | Three things: (a) `MirrorDispatcher` — generic background thread + bounded queue + drop-oldest-on-overflow; (b) `DualEventRepo` — thin wrapper composing primary + mirror via the dispatcher; (c) `make_event_repo(db, storage_mode=None)` — factory that reads `FACTORY_STORAGE_EVENTS` and returns the right repo. |
+| [`factory_v2/interfaces/worker_main.py`](factory_v2/interfaces/worker_main.py) | Single line changed — `self.event_repo = make_event_repo(db)` instead of `FirestoreEventRepo(db)`. This is the only production-code edit. |
+| [`tests/test_sqlite_event_repo.py`](tests/test_sqlite_event_repo.py) | 9 tests. Parity against the interface contract. |
+| [`tests/test_dual_event_repo.py`](tests/test_dual_event_repo.py) | 13 tests. Dual-write semantics, mirror failure tolerance, ordering, queue overflow, async-ness (timing assertion), lifecycle. |
+| [`tests/test_event_repo_factory.py`](tests/test_event_repo_factory.py) | 7 tests. Env-var dispatch, unknown values, case sensitivity, default-firestore safety. |
+| [`tests/test_event_repo_integration.py`](tests/test_event_repo_integration.py) | 5 tests. Real SQLite + fake Firestore mirror, realistic event sequence (single job, 5 concurrent jobs, intermittent mirror failures). |
+
+### Env vars and config introduced
+
+| Var | Default | Effect |
+|---|---|---|
+| `FACTORY_STORAGE_EVENTS` | `firestore` | One of `firestore` / `sqlite` / `dual` (case-insensitive). Picks the events-repo backend. Unknown values log a warning + fall back to `firestore`. |
+| `FACTORY_DB_PATH` | `worker/.tmp/factory.db` | Override the SQLite file location. Mostly for tests. |
 
 ### Subtasks (mark as we go)
 
@@ -105,46 +124,153 @@ If Phase 1 reveals a fundamental flaw in the dual-write approach, we find out wi
 - [ ] Flip default to `dual` once we have a few successful runs
 - [ ] Document operational checks (how to inspect events.db, how to detect mirror lag)
 
-### Validation checkpoints
+### Operational playbook — how to actually flip Phase 1
 
-After Phase 1 ships:
-1. **Run a normal meditation job with `FACTORY_STORAGE_EVENTS=dual`**. Admin UI should look identical. SQLite db file should have all the same events that Firestore has.
-2. **Kill the Firestore connection** (block network temporarily). Worker should keep functioning — SQLite is authoritative.
-3. **Inspect mirror lag**: `tail -f` the mirror write log; gap between SQLite write and Firestore mirror should be <500 ms steady state.
-4. **Restart the worker mid-job**: on restart, the reconciliation pass should replay any unmirrored events.
+To enable dual-write events on a real worker:
 
-### Risks specific to Phase 1
+1. Edit `~/Library/LaunchAgents/com.calmdemy.companion.plist`. Inside the existing `EnvironmentVariables` `<dict>` block, add:
 
-- **SQLite file lock contention.** Multiple workers writing to the same db file. Standard SQLite with WAL mode handles this fine for ≤10 concurrent writers, but worth verifying with a test.
-- **Mirror queue grows unboundedly if Firestore is down for hours.** Need a size cap + oldest-drop policy.
-- **Reconciliation pass on startup is O(n)** in number of unmirrored rows. Worst case: hours of downtime → minutes to reconcile. Acceptable.
+   ```xml
+   <key>FACTORY_STORAGE_EVENTS</key>
+   <string>dual</string>
+   ```
+
+2. Restart the companion:
+
+   ```bash
+   launchctl kickstart -k gui/$(id -u)/com.calmdemy.companion
+   ```
+
+3. Confirm the worker booted in dual mode (look for the log line printed by the factory):
+
+   ```bash
+   grep "events repo:" worker/logs/local_worker_*.log | tail -3
+   # Should print: "events repo: dual (SQLite primary + Firestore mirror)"
+   ```
+
+4. Run a meditation job through admin UI. When it completes, validate parity:
+
+   ```bash
+   # Total event count in SQLite
+   sqlite3 worker/.tmp/factory.db "SELECT COUNT(*) FROM factory_events"
+
+   # Distribution by event type (sanity check on shape)
+   sqlite3 worker/.tmp/factory.db \
+     "SELECT event_type, COUNT(*) FROM factory_events GROUP BY event_type ORDER BY 2 DESC"
+
+   # Events for a specific job (replace JOBID)
+   sqlite3 worker/.tmp/factory.db \
+     "SELECT event_type, created_at FROM factory_events WHERE job_id='JOBID' ORDER BY created_at"
+   ```
+
+   Compare to the same job's events in Firestore's `factory_events` collection. Counts should match exactly. If they don't, see the troubleshooting section below.
+
+5. After 3+ successful runs with matching counts, change the default in `make_event_repo` from `"firestore"` to `"dual"` (one-line edit in `dual_repos.py`). Land that as a separate small commit. Now everyone gets dual by default.
+
+### Operational checks — how to inspect / debug
+
+| Question | How to answer |
+|---|---|
+| Is the dispatcher keeping up? | The dispatcher exposes a `metrics()` dict: `queue_size`, `drops`, `failures`, `success`. To surface in production, we'd thread it through a status endpoint (not done yet — TBD). |
+| Where's the SQLite file? | `worker/.tmp/factory.db` (or wherever `FACTORY_DB_PATH` points). Survives launchd restarts. |
+| Did the mirror lose any events? | If `mirror.drops + mirror.failures > 0` after a run, some events didn't reach Firestore. SQLite still has them. Admin UI will be missing those rows. |
+| How big can the SQLite db get? | One event ≈ 200 bytes. A 50-event job → 10 KB. 1000 jobs → 10 MB. Not a concern at current scale. WAL mode keeps writes fast even at GB sizes. |
+
+### Troubleshooting Phase 1
+
+| Symptom | Likely cause | What to check |
+|---|---|---|
+| Worker boot log shows `events repo: firestore` despite the env var | Plist edit didn't take, or `launchctl kickstart` didn't reload | `launchctl list \| grep calmdemy` — check the PID changed; `cat ~/Library/LaunchAgents/com.calmdemy.companion.plist \| grep FACTORY_STORAGE` |
+| SQLite count ≠ Firestore count after a job | Mirror failures during the run | Inspect dispatcher metrics; check `local_worker_*.log` for `"mirror dispatch failed"` warnings |
+| `worker/.tmp/factory.db` doesn't exist after the worker started | Worker still in firestore mode, or `FACTORY_DB_PATH` points elsewhere | See first symptom + `echo $FACTORY_DB_PATH` |
+| `sqlite3` reports "database is locked" | Another process has an exclusive lock | WAL mode shouldn't cause this; check `ps` for orphan worker processes |
+| Tests fail with "no module named factory_v2" | Forgot to activate `.venv` | `cd worker && .venv/bin/python -m unittest discover -s tests` (the venv's Python, not system Python 3.9) |
+
+### Risks specific to Phase 1 (with mitigations)
+
+- **SQLite file lock contention.** Multiple workers writing to the same db file. WAL mode (set on init in `SqliteEventRepo`) handles this fine for ≤10 concurrent writers. We have at most 6 worker stacks; well within tolerance. Not validated under contention yet — Phase 1 step 5 (real-run validation) will exercise this.
+- **Mirror queue grows unboundedly if Firestore is down for hours.** Mitigated: bounded queue (10k default, configurable via `DualEventRepo(max_queue=N)`) + drop-oldest-on-overflow.
+- **Worker crash between SQLite write and Firestore mirror.** Last-few events lost from Firestore but kept in SQLite. Acceptable for audit-only data. Future phases (step_runs, state-bearing collections) will revisit this with a reconciliation pass on boot.
 
 ---
 
-## Phases 2-6: detailed plans (TBD when we get there)
+## Phase 2: `factory_step_runs` (next up — detailed plan)
 
-Skeletons only for now. Each gets a full plan when its turn comes.
+The hot path. **This is the migration that fixes the eventual-consistency race we keep hitting** (already mitigated surgically in [`43f4e7b9`](https://github.com/Aiden-Hyun/calmdemy-admin/commit/43f4e7b9), but Phase 2 closes it structurally — reads from SQLite never see stale state).
 
-### Phase 2: `factory_step_runs`
-Fixes the eventual-consistency race class. Hot path. Read-heavy on `succeeded_shard_keys`, `failed_shard_keys`, `state`. Dual-write writes go to both backends. **Reads must come from SQLite** — that's the whole point.
+### What's reused from Phase 1 (no new work)
+
+- **`MirrorDispatcher`** — generic, already handles bounded queue, drop-oldest, daemon thread, failure tolerance. Just instantiate a new one named `"step_runs"`.
+- **Factory pattern** — copy `make_event_repo` shape into `make_step_run_repo`. Same env-var-or-explicit-arg signature. Same case normalization, same unknown-value fallback behavior.
+- **Composition root wiring** — same one-line edit in `worker_main.py`.
+- **Test scaffolding** — copy the integration-test structure (real SQLite + fake Firestore + simulated load) and adapt for step_runs.
+- **PRAGMAs and connection setup** — same WAL / NORMAL / check_same_thread pattern.
+
+### What's NEW in Phase 2
+
+- **Schema is more complex.** Events is one append-only table. step_runs is mutable (`ready → running → succeeded`/`failed`) and queried by composite indexes (`job_id + run_id + step_name + state`). Need to think about which composite indexes are critical for query latency.
+- **Read paths matter.** This is where the eventual-consistency win actually lives. The orchestrator calls `succeeded_shard_keys`, `failed_shard_keys`, `state`, `has_succeeded` — all reads. In dual mode, these MUST read from SQLite, otherwise we get the same Firestore lag as before.
+- **Update semantics.** `mark_running`, `mark_succeeded`, `mark_failed`, `mark_retry_scheduled` — multiple state transitions. The mirror must replay them in order; the dispatcher's FIFO queue handles this within one repo, but cross-method ordering needs verification.
+- **`heartbeat` is high-frequency.** The watchdog calls `heartbeat` every ~2s per running step. Volume is much higher than events. Mirror queue sizing may need adjustment.
+- **`ensure_ready` uses `create()` semantics** (idempotent create). SQLite's equivalent is `INSERT OR IGNORE` then a SELECT. Different mental model.
+- **`batch_mark_succeeded_from_checkpoint`** (introduced in [`d8424f96`](https://github.com/Aiden-Hyun/calmdemy-admin/commit/d8424f96)). Must work in SQLite too — and in SQLite it's nearly free vs Firestore's network round-trips. Phase 2 is where the restart-latency win actually materializes.
+
+### Subtask plan for Phase 2
+
+Same shape as Phase 1:
+
+1. **Design SQLite schema for `factory_step_runs`** — columns, indexes mirroring composite Firestore indexes, transaction boundaries.
+2. **Implement `SqliteStepRunRepo`** with all methods of the Firestore one: `ensure_ready`, `mark_running`, `mark_succeeded`, `mark_failed`, `state`, `succeeded_shard_keys`, `failed_shard_keys`, `has_succeeded`, `heartbeat`, `mark_succeeded_from_checkpoint`, `batch_mark_succeeded_from_checkpoint`, `delete`, `mark_retry_scheduled`. Parity tests for each.
+3. **Implement `DualStepRunRepo`** — same dual-write pattern as `DualEventRepo`, but with read methods that go to the primary (SQLite).
+4. **`make_step_run_repo` factory** + composition root wiring. `FACTORY_STORAGE_STEP_RUNS` env var. Default `firestore`.
+5. **Integration tests** — orchestrator runs against the dual repo, verify reads come from SQLite (no race), writes land in both, mirror failures don't break the pipeline.
+6. **Real-run validation** — flip the env var, run a few jobs, compare row counts.
+7. **Flip default to `dual`** after confidence.
+
+### Risks specific to Phase 2
+
+- **Read-path correctness is load-bearing.** If `succeeded_shard_keys` reads from SQLite but the orchestrator's logic accidentally branches based on something written to Firestore-only, we get split-brain. Must audit every read site.
+- **Heartbeat write rate may pressure the mirror queue.** 6 workers × 1 step each × 0.5 Hz = 3 mirror writes/sec from heartbeats alone. Plus state transitions. Total mirror write rate during a busy job might hit 10-20/sec. Well within Firestore capacity but worth measuring.
+- **Schema migration story.** Once we have a `factory.db` from Phase 1 with just events table, Phase 2 adds step_runs table to the same db. `CREATE TABLE IF NOT EXISTS` handles this for greenfield; existing installations will pick it up on next boot via the inline schema bootstrap.
+
+---
+
+## Phases 3-6: skeletons (planned when their turn comes)
 
 ### Phase 3: `factory_step_queue`
-Atomic claim is the riskiest piece. SQLite transactions can implement this, but the contention story is different from Firestore's. May need to introduce a connection pool. Highest-effort phase.
+Atomic claim is the riskiest piece. SQLite transactions can implement this, but the contention story is different from Firestore's (no `runTransaction` with exponential backoff — need explicit retry). May need to introduce a connection pool for the queue claim hot path. Highest-effort phase.
 
 ### Phase 4: `worker_status`
 Heartbeats. Companion + workers all touch this. Simple schema. Helps recovery_manager and autoscaler decisions get tighter latency.
 
 ### Phase 5: `factory_jobs.runtime`
-The accumulator. Lots of `patch_runtime` calls. JSON column or normalized? Likely JSON given the dynamic shape. Mirror needs to handle Firestore's dot-notation merge semantics.
+The accumulator. Lots of `patch_runtime` calls with arbitrary nested keys. JSON column or normalized? Likely JSON given the dynamic shape. Mirror needs to handle Firestore's dot-notation merge semantics — SQLite JSON1 extension's `json_patch` is close but not identical.
 
 ### Phase 6: `factory_job_runs`
 Mostly straightforward — small state, low volume. Save for last because it's least urgent.
 
 ---
 
-## Lessons learned (append as we go)
+## Phase 1 retrospective (after code-complete)
 
-*(empty for now — populate after each phase)*
+**What worked:**
+- **Five-step sequencing (schema → SqliteRepo → DualRepo → factory → integration tests) kept each commit small enough to review independently.** Each commit was a clean checkpoint that could be reverted without affecting earlier ones.
+- **Default-firestore safety contract.** Pinning `test_default_returns_firestore_event_repo` and `test_default_mode_never_touches_sqlite` means we landed all this code without changing runtime behavior — anyone can deploy main and not notice.
+- **Generic `MirrorDispatcher` design paid off in the same phase.** Used by `DualEventRepo` and will be reused unchanged by Phase 2's `DualStepRunRepo`. Probably also Phase 3 (queue).
+- **34 tests in 4 commits.** High test-to-code ratio for migration work. Each test pins a *specific contract* (drop-oldest, async-ness timing, default safety, etc.) rather than just "happy path works."
+
+**What was harder than expected:**
+- **Threading semantics around close/flush.** Got the order wrong on first attempt — set `_stop` before flushing, which made the consumer exit before draining. Fixed by flushing first, then stopping. Pinned by `test_close_flushes_pending_writes`.
+- **Test isolation for SQLite path.** Multiple tests sharing a `factory.db` file would interfere. Solved with per-test `tempfile.TemporaryDirectory` + `FACTORY_DB_PATH` env override. Worth standardizing this pattern for Phase 2.
+
+**What we should do differently in Phase 2:**
+- **Land a `tests/_fixtures.py` first** with the temp-db / env-override boilerplate, instead of duplicating it across each test file.
+- **Surface dispatcher metrics in `worker_status`** so operators can see queue depth in real time without reading code. Tracked as a "would be nice" but not blocking Phase 2.
+- **Define schema in a separate `.sql` file** for the more complex Phase 2 schema. Inline strings worked fine for events' single table, but step_runs' multi-index schema will be more readable as a standalone file with comments.
+
+---
+
+## Lessons learned (append as we go)
 
 ### Phase 1 lessons
 - **Picking the right SQLite PRAGMAs matters.** `journal_mode=WAL` is non-negotiable for our multi-worker setup (writers don't block readers, writers don't block other writers on different rows). `synchronous=NORMAL` is the right speed/safety tradeoff for an audit log; `FULL` would be 10× slower for negligible safety gain on append-only data.
@@ -172,24 +298,47 @@ Mostly straightforward — small state, low volume. Save for last because it's l
 | 2026-05-11 | Phase 1 = `factory_events`, not `factory_step_runs` (which fixes a known bug). | Events is lower risk to validate the dual-write pattern. The race bug already has a surgical fix in `43f4e7b9`. Better to learn the pattern on a safe collection before betting it on the hot path. |
 | 2026-05-11 | SQLite db lives at `worker/.tmp/factory.db`. | Same volume as chunk WAVs, already gitignored, persistent across launchd restarts. Override via `FACTORY_DB_PATH`. |
 | 2026-05-11 | Out of scope: cross-machine coordination. | Current production is single-host. If we ever need cross-machine, we revisit. |
+| 2026-05-12 | Per-collection env var (`FACTORY_STORAGE_EVENTS`) rather than one global flag. | Lets each phase migrate independently; rolling back one collection doesn't force rolling back others. Future phases get their own `FACTORY_STORAGE_STEP_RUNS`, etc. |
+| 2026-05-12 | Mirror writes use `set` + `merge=True` semantics (in the underlying `FirestoreEventRepo.emit`), but each backend generates its own id. | Matching ids across backends would require coordinating writes — extra complexity for marginal cross-reference benefit. If we ever need it, add a `mirror_id` column to the SQLite schema later. |
+| 2026-05-12 | `MirrorDispatcher` runs as a daemon thread, not joined on shutdown. | macOS launchd SIGTERMs us; we don't have a clean shutdown signal to flush. Audit log losing the last few events on hard restart is acceptable. Tests use explicit `close()` for deterministic flush. |
+| 2026-05-12 | Phase 2 = `factory_step_runs`. | Highest-impact next: fixes the eventual-consistency race class structurally, exercises the read-from-primary path that all subsequent phases share. |
 
 ---
 
 ## How to resume this work later (instructions to future-me)
 
-If you're picking this up after a break:
+### General workflow
 
 1. **Read this whole doc top-to-bottom.** Architecture decisions are at the top; phase details below.
 2. **Check the "Phases overview" table** for current status. Find the phase marked 🔵 NEXT.
 3. **Read that phase's "Subtasks" checklist** — what's done, what isn't.
-4. **Read the "Lessons learned" section** for that phase if any prior work was done — it documents non-obvious things that bit us.
+4. **Read the "Lessons learned" + "Phase X retrospective" sections** for any prior phases — they document non-obvious things that bit us and patterns to reuse.
 5. **Start with the first unchecked subtask.** Update the box as you go.
 6. **At end of session**, update:
-   - The status emoji in the phases table
+   - Status emoji in the phases table
    - Subtask checkboxes
    - Lessons learned (anything surprising or non-obvious)
    - Decision log (if you made a meaningful choice)
+   - Commit log section of the current phase
 7. **Commit the doc updates alongside the code changes.** The doc is part of the deliverable.
+
+### Where to pick up right now (as of last update)
+
+**Phase 1 status: code complete. Pending real-run validation before promoting `dual` to default.**
+
+If you want to:
+
+- **Validate Phase 1 end-to-end** → follow the "Operational playbook" section in the Phase 1 docs. Flip the env var, run a meditation, compare counts.
+- **Promote Phase 1 default to `dual`** → after 3+ successful runs with matching counts: edit `make_event_repo` in `dual_repos.py` to default to `"dual"` instead of `"firestore"`. One-line change. Commit as `worker: promote events repo dual mode to default`.
+- **Start Phase 2** → read "Phase 2: `factory_step_runs`" section above. Subtask plan is laid out. Begin with subtask 1 (schema design). Reuse `MirrorDispatcher`, `make_*_repo` factory pattern, integration-test scaffolding from Phase 1 — those are documented as "what's reused."
+
+### Files that matter for picking up
+
+- This doc — context + plan + history.
+- `worker/factory_v2/infrastructure/sqlite_repos.py` — reference SQLite implementation.
+- `worker/factory_v2/infrastructure/dual_repos.py` — reference dual-write pattern.
+- `worker/tests/test_event_repo_*.py` — reference test patterns to copy for new phases.
+- `worker/factory_v2/interfaces/worker_main.py` line 124-ish — composition root, where new factories get wired.
 
 ---
 
