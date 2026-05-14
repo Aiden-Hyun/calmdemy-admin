@@ -219,13 +219,13 @@ The hot path. **This is the migration that fixes the eventual-consistency race w
 
 Same shape as Phase 1:
 
-1. **Design SQLite schema for `factory_step_runs`** — columns, indexes mirroring composite Firestore indexes, transaction boundaries.
-2. **Implement `SqliteStepRunRepo`** with all methods of the Firestore one: `ensure_ready`, `mark_running`, `mark_succeeded`, `mark_failed`, `state`, `succeeded_shard_keys`, `failed_shard_keys`, `has_succeeded`, `heartbeat`, `mark_succeeded_from_checkpoint`, `batch_mark_succeeded_from_checkpoint`, `delete`, `mark_retry_scheduled`. Parity tests for each.
-3. **Implement `DualStepRunRepo`** — same dual-write pattern as `DualEventRepo`, but with read methods that go to the primary (SQLite).
-4. **`make_step_run_repo` factory** + composition root wiring. `FACTORY_STORAGE_STEP_RUNS` env var. Default `firestore`.
-5. **Integration tests** — orchestrator runs against the dual repo, verify reads come from SQLite (no race), writes land in both, mirror failures don't break the pipeline.
-6. **Real-run validation** — flip the env var, run a few jobs, compare row counts.
-7. **Flip default to `dual`** after confidence.
+- [x] **Design SQLite schema for `factory_step_runs`** — separate `.sql` file (per Phase 1 retrospective lesson). 22 columns, 3 indexes (primary composite + 2 secondary), schema-validity tests including EXPLAIN QUERY PLAN. Lives at [`schema/step_runs.sql`](factory_v2/infrastructure/schema/step_runs.sql).
+- [ ] **Implement `SqliteStepRunRepo`** with all methods of the Firestore one: `ensure_ready`, `mark_running`, `mark_succeeded`, `mark_failed`, `state`, `succeeded_shard_keys`, `failed_shard_keys`, `has_succeeded`, `heartbeat`, `mark_succeeded_from_checkpoint`, `batch_mark_succeeded_from_checkpoint`, `delete`, `mark_retry_scheduled`, `mark_waiting`. Parity tests for each.
+- [ ] **Implement `DualStepRunRepo`** — same dual-write pattern as `DualEventRepo`, but with read methods that go to the primary (SQLite). **This is where the consistency-race bug is fixed structurally.**
+- [ ] **`make_step_run_repo` factory** + composition root wiring. `FACTORY_STORAGE_STEP_RUNS` env var. Default `firestore`.
+- [ ] **Integration tests** — orchestrator runs against the dual repo, verify reads come from SQLite (no race), writes land in both, mirror failures don't break the pipeline.
+- [ ] **Real-run validation** — flip the env var, run a few jobs, compare row counts.
+- [ ] **Flip default to `dual`** after confidence.
 
 ### Risks specific to Phase 2
 
