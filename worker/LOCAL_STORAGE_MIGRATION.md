@@ -2,10 +2,10 @@
 
 Living tracking document for the incremental migration of V2 internal state from Firestore to local SQLite. Each phase is independently shippable and the system keeps working after every one.
 
-> **Status: Phase 1 code complete (real-run validation deferred). Phase 2 code complete — schema + SqliteStepRunRepo + DualStepRunRepo + factory + composition-root wiring + integration tests all landed. Real-run validation next.**
-> Phase 1 default remains `firestore`; flip `FACTORY_STORAGE_EVENTS=dual` to opt in.
-> Phase 2 default also `firestore`; flip `FACTORY_STORAGE_STEP_RUNS=dual` to opt in. Code is wired into `worker_main.py` and exercised end-to-end against real SQLite + a fake Firestore mirror, but the default keeps current behavior — deploying main changes nothing.
-> Last updated: 2026-05-13
+> **Status: Phase 1 real-run validation ATTEMPTED on 2026-05-16 — surfaced a `TypeError: Object of type datetime is not JSON serializable` crash in `SqliteEventRepo.emit`. Rolled back to `firestore`; fix pending before re-validation. Phase 2 code complete — schema + SqliteStepRunRepo + DualStepRunRepo + factory + composition-root wiring + integration tests all landed; not yet validated end-to-end.**
+> Phase 1 default remains `firestore`; flipping `FACTORY_STORAGE_EVENTS=dual` is currently UNSAFE until the datetime crash is fixed.
+> Phase 2 default also `firestore`; flip `FACTORY_STORAGE_STEP_RUNS=dual` to opt in. Code is wired into `worker_main.py` and exercised end-to-end against real SQLite + a fake Firestore mirror, but the default keeps current behavior — deploying main changes nothing. **Will also need the same datetime-encoder fix before being safe to enable**, since SqliteStepRunRepo likely has the same payload-serialization gap.
+> Last updated: 2026-05-16
 
 ---
 
@@ -122,7 +122,7 @@ In sequence (read the diffs in this order to understand the build):
 - [x] `make_event_repo()` factory + composition root wiring in `worker_main.py`
 - [x] Factory tests: env-var dispatch, unknown values, case sensitivity (7 tests)
 - [x] Integration test: dual mode with real SQLite + fake Firestore mirror (5 tests)
-- [ ] Validate on a real run: flip `FACTORY_STORAGE_EVENTS=dual` in plist, kick a meditation job, compare SQLite vs Firestore event counts — must match exactly
+- [~] Validate on a real run: ATTEMPTED 2026-05-16. Worker crash-looped on `TypeError: Object of type datetime is not JSON serializable` inside `SqliteEventRepo.emit` — claim_loop emits payloads containing `datetime` objects (started_at, deadline_at, heartbeat_at) which the stdlib `json.dumps` can't serialize. FirestoreEventRepo handled this natively via the Firestore SDK; SQLite branch doesn't. Worker crash → launchd respawn → reclaim same step → crash again. Rolled back to `firestore` mode to unblock production. **Fix pending: add a custom JSON encoder that calls `.isoformat()` on `datetime` (and other non-primitive types we use) inside `SqliteEventRepo.emit`, plus a regression test that emits a realistic payload with `datetime` fields. Same fix needed in `SqliteStepRunRepo` for Phase 2.**
 - [ ] Flip default to `dual` once we have a few successful runs
 - [ ] Document operational checks (how to inspect events.db, how to detect mirror lag)
 
@@ -137,20 +137,36 @@ To enable dual-write events on a real worker:
    <string>dual</string>
    ```
 
-2. Restart the companion:
+2. Reload the plist so the new env var is actually read. **Do NOT use `launchctl kickstart -k` for this** — it restarts the process but reuses the previously-loaded configuration, so your env var change does nothing (see "Operational gotchas with launchctl" below). The correct sequence is:
 
    ```bash
-   launchctl kickstart -k gui/$(id -u)/com.calmdemy.companion
+   launchctl bootout   gui/$(id -u) ~/Library/LaunchAgents/com.calmdemy.companion.plist
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.calmdemy.companion.plist
    ```
 
-3. Confirm the worker booted in dual mode (look for the log line printed by the factory):
+   This unloads the old service definition and re-reads the plist from disk. The companion comes back with the fresh env.
+
+3. Kill any orphan worker processes that the OLD companion had already spawned. Killing the companion does NOT cascade to its child workers — they keep running with the old env until they crash naturally or are killed manually.
 
    ```bash
+   pkill -f "local_worker.py"
+   # The new companion will respawn them within a few seconds with the new env.
+   ```
+
+4. **Confirm the worker actually booted in dual mode.** This is the step that catches both classic launchctl mistakes (plist not reloaded; orphan workers not killed). Two checks:
+
+   ```bash
+   # (a) "events repo: dual" line in a recent boot
    grep "events repo:" worker/logs/local_worker_*.log | tail -3
    # Should print: "events repo: dual (SQLite primary + Firestore mirror)"
+
+   # (b) Process timestamps — the worker PID should be newer than your bootstrap call
+   ps -p $(pgrep -f local_worker.py) -o pid,etime,command
    ```
 
-4. Run a meditation job through admin UI. When it completes, validate parity:
+   ⚠️ **CAUTION on negative confirmation:** `make_event_repo` only logs in `sqlite` and `dual` modes — the default `firestore` branch is **silent**. So "no events repo: line" is ambiguous (could be firestore, could be that the line hasn't been emitted yet). Use the ps check to know the worker is fresh; use the grep to know it's in the mode you wanted.
+
+5. Run a meditation job through admin UI. When it completes, validate parity:
 
    ```bash
    # Total event count in SQLite
@@ -167,7 +183,18 @@ To enable dual-write events on a real worker:
 
    Compare to the same job's events in Firestore's `factory_events` collection. Counts should match exactly. If they don't, see the troubleshooting section below.
 
-5. After 3+ successful runs with matching counts, change the default in `make_event_repo` from `"firestore"` to `"dual"` (one-line edit in `dual_repos.py`). Land that as a separate small commit. Now everyone gets dual by default.
+   **Also check for crashes during the run** — the worker may be in an unhealthy crash-loop without the symptom being visible from the admin UI (you'll just see "job stuck"). The 2026-05-16 datetime-encoder bug surfaced this way.
+
+   ```bash
+   # Any python exceptions in the worker log since the run started
+   grep -E "Traceback|TypeError|ValueError" worker/logs/local_worker_*.log | tail -20
+
+   # Specifically: "mirror dispatch failed" (Firestore-side failures)
+   # vs raw Tracebacks (SQLite-side failures that crash the worker)
+   grep "mirror dispatch failed" worker/logs/local_worker_*.log | wc -l
+   ```
+
+6. After 3+ successful runs with matching counts AND no crash-loops, change the default in `make_event_repo` from `"firestore"` to `"dual"` (one-line edit in `dual_repos.py`). Land that as a separate small commit. Now everyone gets dual by default.
 
 ### Operational checks — how to inspect / debug
 
@@ -178,11 +205,27 @@ To enable dual-write events on a real worker:
 | Did the mirror lose any events? | If `mirror.drops + mirror.failures > 0` after a run, some events didn't reach Firestore. SQLite still has them. Admin UI will be missing those rows. |
 | How big can the SQLite db get? | One event ≈ 200 bytes. A 50-event job → 10 KB. 1000 jobs → 10 MB. Not a concern at current scale. WAL mode keeps writes fast even at GB sizes. |
 
+### Operational gotchas with launchctl (battle-tested 2026-05-16)
+
+Three separate launchctl mistakes can all silently leave you running the OLD config without realizing it. Watch for all of them when flipping `FACTORY_STORAGE_*` env vars:
+
+1. **`launchctl kickstart -k` does NOT re-read the plist.** It restarts the launchd-managed process using the *previously loaded* configuration. Your env var edit sits on disk doing nothing. The only commands that re-read the plist are `unload`/`load` (legacy) and `bootout`/`bootstrap` (modern, preferred). Always use bootout/bootstrap when changing env vars.
+
+2. **Killing the companion does NOT cascade to its child workers.** launchd manages the companion (`com.calmdemy.companion`), but the companion forks `local_worker.py` subprocesses that are NOT under launchd. `bootout` kills the companion; the workers it spawned keep running with whatever env they inherited at fork time. You must explicitly `pkill -f local_worker.py` (or wait for the workers to crash naturally) after a bootstrap before the new env propagates.
+
+3. **The default `firestore` branch is silent in the log.** `make_event_repo` only logs in `sqlite` and `dual` modes. So if you grep for `"events repo:"` and get no line for a recent worker boot, you can't tell whether (a) it booted in firestore mode (success of rollback) or (b) the log line just hasn't appeared yet. Use process timestamps (`ps -p $(pgrep -f local_worker.py) -o etime`) as the ground truth for "is this a fresh worker."
+
+The combined effect: you can edit the plist, run `kickstart -k`, see "no error" in the output, and walk away thinking you've flipped the env var. In reality the companion is still in the old mode, its workers are still in the old mode, and the only signal something is wrong will be either silent crashing or "job stuck" in the admin UI 10 minutes later.
+
+**The reliable sequence is in the operational playbook above** (bootout → bootstrap → pkill workers → grep for the events-repo line). Follow it as a checklist, not from memory.
+
 ### Troubleshooting Phase 1
 
 | Symptom | Likely cause | What to check |
 |---|---|---|
-| Worker boot log shows `events repo: firestore` despite the env var | Plist edit didn't take, or `launchctl kickstart` didn't reload | `launchctl list \| grep calmdemy` — check the PID changed; `cat ~/Library/LaunchAgents/com.calmdemy.companion.plist \| grep FACTORY_STORAGE` |
+| Worker boot log shows `events repo: firestore` (or no line at all) despite a `dual` env var | `kickstart -k` was used instead of `bootout`/`bootstrap`, OR child workers weren't killed after bootstrap | See "Operational gotchas with launchctl" above. Re-do the reload with `bootout`/`bootstrap` then `pkill -f local_worker.py` |
+| Worker log shows repeated `TypeError: Object of type datetime is not JSON serializable` Tracebacks in `SqliteEventRepo.emit` | Real claim_loop payloads contain `datetime` objects; the SQLite branch's `json.dumps` has no default encoder | This was the 2026-05-16 bug. Rolled back to `firestore`. Fix is a custom JSON encoder + regression test (pending). DO NOT re-enable `dual` mode until the fix lands |
+| Worker keeps crashing every ~30s with the same exception in the log; admin UI shows "job stuck" | A crash inside `event_repo.emit` (which fires before the actual step work) brings down the whole process before the step makes progress. Companion respawns the worker, it reclaims the same step, crashes again. Infinite loop | `grep -E "Traceback\|TypeError" worker/logs/local_worker_*.log \| tail -20`. If found, roll back the env var (see operational playbook) to stop the bleeding before debugging |
 | SQLite count ≠ Firestore count after a job | Mirror failures during the run | Inspect dispatcher metrics; check `local_worker_*.log` for `"mirror dispatch failed"` warnings |
 | `worker/.tmp/factory.db` doesn't exist after the worker started | Worker still in firestore mode, or `FACTORY_DB_PATH` points elsewhere | See first symptom + `echo $FACTORY_DB_PATH` |
 | `sqlite3` reports "database is locked" | Another process has an exclusive lock | WAL mode shouldn't cause this; check `ps` for orphan worker processes |
@@ -301,6 +344,15 @@ Mostly straightforward — small state, low volume. Save for last because it's l
 - **Env-var dispatch is lower-cased; explicit `storage_mode=` is not.** Real config sources (plist, .env files) often have inconsistent casing. The env-var path normalizes to lowercase. Explicit calls (only tests) stay strict so we don't accidentally hide a bug.
 - **The integration test uses REAL SQLite, FAKE Firestore.** Halfway between unit and full e2e. SQLite is cheap to spin up per-test (`tempfile.TemporaryDirectory`), Firestore is not. Confidence-cost ratio is high — we exercise the actual SQLite implementation, schema, file I/O, but don't need network access or service-account credentials.
 - **"Default mode never touches SQLite" is a safety test, not just a behavior test.** Pinning that the SQLite file does not exist after a default-mode emit means deploying this code can't accidentally start dual-writing on a machine where the operator hasn't opted in. Tests like this one protect the "land code, don't change behavior" contract.
+
+### Phase 1 lessons from the 2026-05-16 real-run validation attempt
+- **`json.dumps(payload)` is not enough — real claim_loop payloads contain `datetime` objects.** `SqliteEventRepo.emit` called `json.dumps(payload, ...)` with no `default=` callback. `FirestoreEventRepo` got away with arbitrary types because the Firestore SDK has native datetime support; the SQLite branch crashes on `TypeError: Object of type datetime is not JSON serializable`. Our unit tests used primitive-only dict payloads, so they passed. The fix is a small custom encoder (`default=_json_default` that calls `.isoformat()` on `datetime` and falls back to `str()` for unknown types), plus a regression test that emits a realistic payload containing `datetime` fields. Apply the SAME fix to `SqliteStepRunRepo` before enabling Phase 2 in production.
+- **Real-run validation pays for itself by surfacing bugs unit tests can't.** This is the canonical example: 34 unit + integration tests passed, but production payloads had a field shape we never tested with. The lesson is not "write more unit tests" — it's "run real validation BEFORE flipping defaults." Worth restating because the temptation after seeing all-green CI is to skip the messy real-run step.
+- **A crash inside `event_repo.emit` brings down the WHOLE worker, not just the step.** `event_repo.emit` is called by `claim_loop.run_once` which is the worker's main loop. An unhandled exception there propagates up through `run_forever` and exits the process. launchd respawns the worker, which reclaims the same step and crashes again. Infinite crash-loop with no progress and only "job stuck" visible from the admin UI. **Operational consequence:** when validating a new env var, always grep for `Traceback` in the worker log during the run, not just at the end. Don't trust "the job is still pending" — it might mean "the worker is crash-looping in the background."
+- **The right rollback move when validation surfaces a crash bug is to flip the env var IMMEDIATELY, then debug.** Don't try to fix the bug while the worker is crash-looping in production. Roll back first (revert plist + `bootout`/`bootstrap` + `pkill local_worker`) so jobs can resume on the safe path, then fix the bug under no time pressure. The default-firestore safety net only works if you actually use it.
+- **launchctl `kickstart -k` does NOT re-read the plist.** It restarts the launchd-managed process using the previously-loaded configuration. The plist edit sits on disk doing nothing. The fix is `launchctl bootout` + `launchctl bootstrap`, which unload and reload the service definition. **The original Phase 1 operational playbook was wrong about this** — fixed in the same commit that documents this lesson. If you've been telling people "just kickstart" for env-var changes, they've been wondering why their flag didn't take effect.
+- **Killing a launchd-managed process does NOT cascade to its child processes.** `bootout` terminates the companion, but the companion's `local_worker.py` subprocesses keep running with whatever env they inherited at fork time. After bootstrap you must explicitly `pkill -f local_worker.py` so the NEW companion can spawn fresh workers with the new env. Forgetting this is the #2 launchctl mistake (#1 is kickstart-vs-bootstrap).
+- **The default branch of `make_event_repo` is silent in the log.** Only `sqlite` and `dual` modes log "events repo: …". The default (`firestore`) prints nothing. So the absence of an "events repo:" line in a recent worker boot is ambiguous: it could mean "successful rollback to firestore" or "the line just hasn't been emitted yet." Use `ps -p $(pgrep -f local_worker.py) -o etime` to confirm a worker is fresh before drawing conclusions from log greps. (Future: consider always logging the mode, even firestore, just to remove this ambiguity.)
 
 ### Phase 2 lessons (so far)
 - **Schema in a separate `.sql` file paid off immediately.** Phase 2's step_runs table is 22 cols + 3 indexes including a partial index. As a Python string literal it would be unreadable; as a `.sql` file with SQL comments explaining each index, it's reviewable on its own. The `_load_schema_file` helper added in step 2 also positions us to drop in Phase 3-6 tables (`step_queue.sql`, `worker_status.sql`, etc.) without touching `sqlite_repos.py` boilerplate.
