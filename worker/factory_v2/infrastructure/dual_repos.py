@@ -491,3 +491,68 @@ class DualStepRunRepo:
         """Stop the dispatcher. Does NOT close the underlying primary or
         mirror — the composition root owns those lifecycles."""
         self._dispatcher.close()
+
+
+def make_step_run_repo(db, storage_mode: str | None = None):
+    """Construct the step-run repo according to ``FACTORY_STORAGE_STEP_RUNS``.
+
+    Mirrors ``make_event_repo`` exactly; separate env var per collection so
+    each phase of the migration can flip independently (events can run in
+    ``dual`` while step_runs stays on ``firestore``, or vice versa).
+
+    Modes:
+      - ``firestore`` (default): the legacy ``FirestoreStepRunRepo``. No
+        change from pre-migration behavior — this is what every worker
+        does today. Critical: this default is what keeps the migration
+        code safe to deploy without flipping anything.
+      - ``sqlite``: ``SqliteStepRunRepo`` only, no Firestore mirror. Admin
+        UI loses live step state; useful only for offline / dev.
+      - ``dual``: ``DualStepRunRepo`` wrapping SQLite primary + Firestore
+        mirror. Worker reads/writes hit SQLite (strong consistency on the
+        hot path), Firestore continues receiving the same writes
+        asynchronously so the admin UI keeps working. **This is the mode
+        that structurally closes the eventual-consistency race.**
+
+    Args:
+        db: Firestore client. Required for ``firestore`` and ``dual``
+            modes; ignored for ``sqlite``.
+        storage_mode: Override the env var. Mainly for tests.
+
+    Returns:
+        An object implementing the ``FirestoreStepRunRepo`` interface
+        (14 methods: ``make_step_run_id``, ``ensure_ready``,
+        ``mark_running``, ``heartbeat``, ``mark_succeeded``,
+        ``mark_succeeded_from_checkpoint``,
+        ``batch_mark_succeeded_from_checkpoint``, ``mark_failed``,
+        ``mark_retry_scheduled``, ``mark_waiting``, ``delete``,
+        ``state``, ``has_succeeded``, ``succeeded_shard_keys``,
+        ``failed_shard_keys``). Caller doesn't need to know which
+        backend.
+    """
+    if storage_mode is None:
+        storage_mode = os.getenv("FACTORY_STORAGE_STEP_RUNS", "firestore").strip().lower()
+
+    if storage_mode == "sqlite":
+        from .sqlite_repos import SqliteStepRunRepo
+        logger.info("step_runs repo: sqlite-only (no Firestore mirror)")
+        return SqliteStepRunRepo()
+
+    if storage_mode == "dual":
+        from .firestore_repos import FirestoreStepRunRepo
+        from .sqlite_repos import SqliteStepRunRepo
+        logger.info("step_runs repo: dual (SQLite primary + Firestore mirror)")
+        return DualStepRunRepo(
+            primary=SqliteStepRunRepo(),
+            mirror=FirestoreStepRunRepo(db),
+        )
+
+    # Default / unknown values fall through to Firestore-only with a log
+    # line. "Unknown" is intentionally not a hard error — a plist typo
+    # shouldn't bring the worker down at boot.
+    if storage_mode != "firestore":
+        logger.warning(
+            "unrecognized FACTORY_STORAGE_STEP_RUNS=%r; defaulting to firestore",
+            storage_mode,
+        )
+    from .firestore_repos import FirestoreStepRunRepo
+    return FirestoreStepRunRepo(db)

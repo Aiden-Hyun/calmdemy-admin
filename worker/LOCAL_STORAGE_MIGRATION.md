@@ -2,9 +2,9 @@
 
 Living tracking document for the incremental migration of V2 internal state from Firestore to local SQLite. Each phase is independently shippable and the system keeps working after every one.
 
-> **Status: Phase 1 code complete (real-run validation deferred). Phase 2 in progress — schema + SqliteStepRunRepo + DualStepRunRepo done, factory + wiring next.**
+> **Status: Phase 1 code complete (real-run validation deferred). Phase 2 in progress — schema + SqliteStepRunRepo + DualStepRunRepo + `make_step_run_repo` factory + composition-root wiring done. Integration tests next.**
 > Phase 1 default remains `firestore`; flip `FACTORY_STORAGE_EVENTS=dual` to opt in.
-> Phase 2 code is shipping in no-op increments — nothing imports `SqliteStepRunRepo` or `DualStepRunRepo` yet (no factory yet).
+> Phase 2 default also `firestore`; flip `FACTORY_STORAGE_STEP_RUNS=dual` to opt in. Code is wired into `worker_main.py` but the default keeps current behavior — deploying main changes nothing.
 > Last updated: 2026-05-13
 
 ---
@@ -56,7 +56,7 @@ Three implications:
 | Phase | Collection | Status | Why this order | Estimated effort |
 |---|---|---|---|---|
 | **1** | `factory_events` | 🟢 CODE DONE, pending real-run validation | Safest. Append-only, no reads in hot path, failures are non-fatal (audit log). Proves the dual-write pattern. | ~1500 LOC shipped (4 commits) |
-| **2** | `factory_step_runs` | 🟡 IN PROGRESS — schema + SqliteStepRunRepo + DualStepRunRepo done; factory + wiring next | Fixes the consistency race class of bugs we keep hitting. The hot path. | ~600 LOC, ~2 days |
+| **2** | `factory_step_runs` | 🟡 IN PROGRESS — schema + SqliteStepRunRepo + DualStepRunRepo + factory + wiring done; integration tests next | Fixes the consistency race class of bugs we keep hitting. The hot path. | ~600 LOC, ~2 days |
 | **3** | `factory_step_queue` | ⏳ | Atomic claim semantics. Highest risk. Biggest throughput win. | ~800 LOC, ~3 days |
 | **4** | `worker_status` | ⏳ | Heartbeats. Tightly local. Could fix recovery sweep flakiness. | ~300 LOC, ~1 day |
 | **5** | `factory_jobs.runtime` | ⏳ | Big accumulator. Many writes per run. | ~500 LOC, ~2 days |
@@ -109,6 +109,7 @@ In sequence (read the diffs in this order to understand the build):
 | Var | Default | Effect |
 |---|---|---|
 | `FACTORY_STORAGE_EVENTS` | `firestore` | One of `firestore` / `sqlite` / `dual` (case-insensitive). Picks the events-repo backend. Unknown values log a warning + fall back to `firestore`. |
+| `FACTORY_STORAGE_STEP_RUNS` *(Phase 2)* | `firestore` | One of `firestore` / `sqlite` / `dual` (case-insensitive). Picks the step-runs-repo backend. Independent of `FACTORY_STORAGE_EVENTS` — flip them separately. |
 | `FACTORY_DB_PATH` | `worker/.tmp/factory.db` | Override the SQLite file location. Mostly for tests. |
 
 ### Subtasks (mark as we go)
@@ -225,6 +226,7 @@ In sequence (read the diffs in this order to understand the build):
 | 1 | [`018065d5`](https://github.com/Aiden-Hyun/calmdemy-admin/commit/018065d5) | `schema/step_runs.sql` (22 cols, 3 indexes, partial index for stale-lease sweep) + 8 schema-validity tests including EXPLAIN QUERY PLAN check. |
 | 2 | [`c9c3d3ff`](https://github.com/Aiden-Hyun/calmdemy-admin/commit/c9c3d3ff) | `SqliteStepRunRepo` — all 14 methods of `FirestoreStepRunRepo` reimplemented against SQLite. Schema loader refactored to read `schema/*.sql` files. 33 parity tests across 7 test classes (id helpers, ensure_ready, state transitions, checkpoint UPSERT, read paths, delete, concurrency, id parsing). |
 | 3 | [`51f73d75`](https://github.com/Aiden-Hyun/calmdemy-admin/commit/51f73d75) | `DualStepRunRepo` — composes `SqliteStepRunRepo` (primary) + `FirestoreStepRunRepo` (mirror). Writes dispatch to both; reads go to primary ONLY (this is the structural race fix). Reuses the generic `MirrorDispatcher` from Phase 1 unchanged. 21 tests across 5 classes pin: writes-to-both for every method (11), reads-from-primary-only for every read (5), mirror failure tolerance (3), async non-blocking timing (1), FIFO ordering (1). Constructor rejects `None` for either backend. No wiring yet — no factory means nothing imports this class. |
+| 4 | (this commit) | `make_step_run_repo` factory + composition-root wiring. `FACTORY_STORAGE_STEP_RUNS` env var (firestore / sqlite / dual). Single-line change in `worker_main.py`: `self.step_run_repo = make_step_run_repo(db)`. 9 factory tests pin default-firestore safety (including "default mode never touches SQLite"), explicit-mode dispatch, env-var read + case-insensitive normalization, unknown-value warn-and-fall-back, dual-mode wiring (SQLite primary + Firestore mirror — pinned both directions), and cross-factory independence (events ↔ step_runs env vars are decoupled). **Default still `firestore` — zero runtime change.** |
 
 ### Subtask plan for Phase 2
 
@@ -233,7 +235,7 @@ Same shape as Phase 1:
 - [x] **Design SQLite schema for `factory_step_runs`** — separate `.sql` file (per Phase 1 retrospective lesson). 22 columns, 3 indexes (primary composite + 2 secondary), schema-validity tests including EXPLAIN QUERY PLAN. Lives at [`schema/step_runs.sql`](factory_v2/infrastructure/schema/step_runs.sql).
 - [x] **Implement `SqliteStepRunRepo`** with all 14 methods of the Firestore one. Lives in [`sqlite_repos.py`](factory_v2/infrastructure/sqlite_repos.py). Parity tests (33) cover state transitions, ensure_ready idempotency, checkpoint UPSERT semantics, read-path correctness with realistic mixed-state data, batch operations up to 1500 rows, multi-threaded concurrent writes, and the step_run_id parse helper.
 - [x] **Implement `DualStepRunRepo`** — same dual-write pattern as `DualEventRepo`, but with **read methods that go to the primary (SQLite) ONLY — never to the mirror**. **This is where the consistency-race bug is fixed structurally.** Lives in [`dual_repos.py`](factory_v2/infrastructure/dual_repos.py) alongside `DualEventRepo`. 21 tests cover: every write method dispatches to both backends (11), every read method goes to primary only and ignores mirror state (5), mirror failure tolerance (3), async non-blocking via timing assertion (1), and FIFO ordering of state transitions (1).
-- [ ] **`make_step_run_repo` factory** + composition root wiring. `FACTORY_STORAGE_STEP_RUNS` env var. Default `firestore`.
+- [x] **`make_step_run_repo` factory** + composition root wiring. `FACTORY_STORAGE_STEP_RUNS` env var. Default `firestore`. Same 3-mode dispatch as `make_event_repo` (firestore / sqlite / dual). Wired in [`worker_main.py`](factory_v2/interfaces/worker_main.py) — single-line change to `self.step_run_repo = make_step_run_repo(db)`. 9 factory tests pin the default-firestore safety contract (including "default mode never touches SQLite"), explicit modes, env-var dispatch with case-insensitive normalization, unknown-value warn-and-fall-back, dual-mode wiring (SQLite primary + Firestore mirror — pinned both directions), and a cross-factory independence test that flipping `FACTORY_STORAGE_EVENTS` does NOT affect `FACTORY_STORAGE_STEP_RUNS` and vice versa.
 - [ ] **Integration tests** — orchestrator runs against the dual repo, verify reads come from SQLite (no race), writes land in both, mirror failures don't break the pipeline.
 - [ ] **Real-run validation** — flip the env var, run a few jobs, compare row counts.
 - [ ] **Flip default to `dual`** after confidence.
@@ -305,6 +307,8 @@ Mostly straightforward — small state, low volume. Save for last because it's l
 - **`DualStepRunRepo` reads MUST bypass the mirror entirely.** Not "prefer primary, fall back to mirror" — primary ONLY. If we ever route a read to the mirror, we re-open the eventual-consistency race we just closed. Pinned by `test_reads_unaffected_by_mirror_being_broken` (mirror raises on every read; dual repo still returns the right value because reads never touch it).
 - **`batch_mark_succeeded_from_checkpoint` must snapshot inputs defensively before deferring the mirror call.** The mirror write runs later on the dispatcher thread — if the caller mutates the entries list after our sync return (rare but possible), the mirror would write the mutated version. Cheap fix: `list(entries)` at the sync site. Pinned by `test_batch_snapshot_caller_can_reuse_list`.
 - **Primary errors propagate; mirror errors don't.** Same rule as Phase 1, restated for the hot path: if SQLite write fails, the orchestrator must see the exception so the step can be retried. If Firestore mirror fails, the worker continues — admin UI loses one row, but the worker's source of truth is intact.
+- **Per-collection env vars need a cross-factory independence test.** It's tempting to assume "two factories, two env vars, obviously independent" — but a future refactor could collapse them onto a shared base class with a single env var read, silently coupling them. Pinned by `test_events_and_step_runs_env_vars_are_independent` (flip one, the other stays default; flip the other, the first stays default). Cheap test, real footgun prevention.
+- **The composition-root wiring change is one line.** Same shape as Phase 1 step 3 in `worker_main.py`: `FirestoreStepRunRepo(db)` → `make_step_run_repo(db)`. The factory absorbs all the dispatch logic. Anyone reviewing the diff sees "factory call replaces direct constructor" and that's the whole production-code change. Default-firestore keeps the contract intact: deploying this commit changes nothing until an operator sets the env var.
 
 ---
 
