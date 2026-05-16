@@ -282,3 +282,212 @@ def make_event_repo(db, storage_mode: str | None = None):
         )
     from .firestore_repos import FirestoreEventRepo
     return FirestoreEventRepo(db)
+
+
+# ---------------------------------------------------------------------------
+# Step-run repository (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+class DualStepRunRepo:
+    """SQLite-primary + Firestore-mirror step-run repository.
+
+    **Key difference from DualEventRepo**: step_runs are *read* by the
+    worker, not just written. The whole point of routing the migration
+    through SQLite is strong read-after-write consistency for the
+    orchestrator's hot read paths (``succeeded_shard_keys``,
+    ``failed_shard_keys``, ``state``, ``has_succeeded``). Those reads
+    MUST come from the primary (SQLite) — if they routed to the mirror
+    (Firestore) we'd be back to the eventual-consistency race that
+    43f4e7b9 patched surgically.
+
+    Pattern:
+      - **Writes** go to SQLite synchronously (transactional, source of
+        truth) AND to Firestore asynchronously via the same
+        ``MirrorDispatcher`` Phase 1 introduced. The mirror keeps the
+        admin UI's view of step state alive without changing the JS
+        SDK.
+      - **Reads** route to SQLite only. Strong consistency, zero
+        Firestore round-trips on the hot path.
+
+    Mirror failure semantics (same as DualEventRepo):
+      - SQLite write failure → propagates (worker treats as real error).
+      - Firestore mirror write failure → logged + counted, never raised.
+      - Mirror queue overflow → drops OLDEST (newer state matters more).
+
+    Caveat: this repo is intentionally NOT a drop-in replacement for
+    ``FirestoreStepRunRepo`` when there's no SQLite primary. Construct
+    via ``make_step_run_repo`` so the composition root picks the right
+    backend based on ``FACTORY_STORAGE_STEP_RUNS``.
+    """
+
+    def __init__(
+        self,
+        primary,
+        mirror,
+        *,
+        max_queue: int = 10_000,
+        _dispatcher: MirrorDispatcher | None = None,
+    ):
+        if primary is None:
+            raise ValueError("DualStepRunRepo requires a primary backend")
+        if mirror is None:
+            raise ValueError(
+                "DualStepRunRepo requires a mirror backend; "
+                "if you want primary-only, use the primary directly"
+            )
+        self._primary = primary
+        self._mirror = mirror
+        # Reuse the Phase 1 MirrorDispatcher unchanged. Per-collection
+        # name so log lines distinguish events vs step_runs failures.
+        self._dispatcher = _dispatcher or MirrorDispatcher(
+            name="step_runs", max_queue=max_queue,
+        )
+
+    # ------------- read methods: primary only ----------------
+    #
+    # These never touch the mirror. The orchestrator depends on
+    # read-after-write consistency for fan-in correctness; routing
+    # reads to the mirror would reintroduce the very race we're
+    # migrating to fix.
+
+    def state(self, run_id: str, step_name: str, shard_key: str = "root") -> str | None:
+        return self._primary.state(run_id, step_name, shard_key)
+
+    def has_succeeded(self, job_id: str, run_id: str, step_name: str) -> bool:
+        return self._primary.has_succeeded(job_id, run_id, step_name)
+
+    def succeeded_shard_keys(self, job_id: str, run_id: str, step_name: str) -> set:
+        return self._primary.succeeded_shard_keys(job_id, run_id, step_name)
+
+    def failed_shard_keys(self, job_id: str, run_id: str, step_name: str) -> set:
+        return self._primary.failed_shard_keys(job_id, run_id, step_name)
+
+    @staticmethod
+    def make_step_run_id(run_id: str, step_name: str, shard_key: str = "root") -> str:
+        # Pure helper; deterministic; identical format across backends.
+        # Keep on the class for callers that import the type directly.
+        return f"{run_id}__{step_name}__{shard_key}"
+
+    # ------------- write methods: primary sync, mirror async ----------------
+
+    def ensure_ready(self, job_id: str, run_id: str, step_name: str, shard_key: str = "root") -> str:
+        step_run_id = self._primary.ensure_ready(job_id, run_id, step_name, shard_key)
+        # Closure args bound now to defend against mutation by caller.
+        mirror = self._mirror
+        self._dispatcher.submit(
+            lambda: mirror.ensure_ready(job_id, run_id, step_name, shard_key)
+        )
+        return step_run_id
+
+    def mark_running(
+        self,
+        step_run_id: str,
+        queue_id: str,
+        worker_id: str,
+        attempt: int = 1,
+        *,
+        started_at=None,
+        deadline_at=None,
+    ) -> None:
+        self._primary.mark_running(
+            step_run_id, queue_id, worker_id, attempt,
+            started_at=started_at, deadline_at=deadline_at,
+        )
+        mirror = self._mirror
+        self._dispatcher.submit(
+            lambda: mirror.mark_running(
+                step_run_id, queue_id, worker_id, attempt,
+                started_at=started_at, deadline_at=deadline_at,
+            )
+        )
+
+    def heartbeat(
+        self,
+        step_run_id: str,
+        worker_id: str,
+        *,
+        deadline_at,
+        progress_detail: str | None = None,
+    ) -> None:
+        self._primary.heartbeat(
+            step_run_id, worker_id, deadline_at=deadline_at, progress_detail=progress_detail,
+        )
+        mirror = self._mirror
+        self._dispatcher.submit(
+            lambda: mirror.heartbeat(
+                step_run_id, worker_id, deadline_at=deadline_at, progress_detail=progress_detail,
+            )
+        )
+
+    def mark_succeeded(self, step_run_id: str, output: dict) -> None:
+        self._primary.mark_succeeded(step_run_id, output)
+        mirror = self._mirror
+        self._dispatcher.submit(lambda: mirror.mark_succeeded(step_run_id, output))
+
+    def mark_succeeded_from_checkpoint(self, step_run_id: str, output: dict) -> None:
+        self._primary.mark_succeeded_from_checkpoint(step_run_id, output)
+        mirror = self._mirror
+        self._dispatcher.submit(
+            lambda: mirror.mark_succeeded_from_checkpoint(step_run_id, output)
+        )
+
+    def batch_mark_succeeded_from_checkpoint(
+        self,
+        entries: list[tuple[str, str, str, str, dict]],
+    ) -> None:
+        # Snapshot entries — caller might reuse the list after we return.
+        entries_copy = list(entries)
+        self._primary.batch_mark_succeeded_from_checkpoint(entries_copy)
+        mirror = self._mirror
+        self._dispatcher.submit(
+            lambda: mirror.batch_mark_succeeded_from_checkpoint(entries_copy)
+        )
+
+    def mark_failed(self, step_run_id: str, error_code: str, error_message: str) -> None:
+        self._primary.mark_failed(step_run_id, error_code, error_message)
+        mirror = self._mirror
+        self._dispatcher.submit(
+            lambda: mirror.mark_failed(step_run_id, error_code, error_message)
+        )
+
+    def mark_retry_scheduled(
+        self,
+        step_run_id: str,
+        error_code: str,
+        error_message: str,
+        next_attempt: int,
+        delay_seconds: int,
+    ) -> None:
+        self._primary.mark_retry_scheduled(
+            step_run_id, error_code, error_message, next_attempt, delay_seconds,
+        )
+        mirror = self._mirror
+        self._dispatcher.submit(
+            lambda: mirror.mark_retry_scheduled(
+                step_run_id, error_code, error_message, next_attempt, delay_seconds,
+            )
+        )
+
+    def mark_waiting(self, step_run_id: str, delay_seconds: int) -> None:
+        self._primary.mark_waiting(step_run_id, delay_seconds)
+        mirror = self._mirror
+        self._dispatcher.submit(lambda: mirror.mark_waiting(step_run_id, delay_seconds))
+
+    def delete(self, step_run_id: str) -> None:
+        self._primary.delete(step_run_id)
+        mirror = self._mirror
+        self._dispatcher.submit(lambda: mirror.delete(step_run_id))
+
+    # ------------- lifecycle / observability ----------------
+
+    def metrics(self) -> dict[str, int]:
+        return self._dispatcher.metrics()
+
+    def flush(self, timeout: float = 5.0) -> bool:
+        return self._dispatcher.flush(timeout=timeout)
+
+    def close(self) -> None:
+        """Stop the dispatcher. Does NOT close the underlying primary or
+        mirror — the composition root owns those lifecycles."""
+        self._dispatcher.close()
