@@ -220,7 +220,7 @@ The hot path. **This is the migration that fixes the eventual-consistency race w
 Same shape as Phase 1:
 
 - [x] **Design SQLite schema for `factory_step_runs`** — separate `.sql` file (per Phase 1 retrospective lesson). 22 columns, 3 indexes (primary composite + 2 secondary), schema-validity tests including EXPLAIN QUERY PLAN. Lives at [`schema/step_runs.sql`](factory_v2/infrastructure/schema/step_runs.sql).
-- [ ] **Implement `SqliteStepRunRepo`** with all methods of the Firestore one: `ensure_ready`, `mark_running`, `mark_succeeded`, `mark_failed`, `state`, `succeeded_shard_keys`, `failed_shard_keys`, `has_succeeded`, `heartbeat`, `mark_succeeded_from_checkpoint`, `batch_mark_succeeded_from_checkpoint`, `delete`, `mark_retry_scheduled`, `mark_waiting`. Parity tests for each.
+- [x] **Implement `SqliteStepRunRepo`** with all 14 methods of the Firestore one. Lives in [`sqlite_repos.py`](factory_v2/infrastructure/sqlite_repos.py). Parity tests (33) cover state transitions, ensure_ready idempotency, checkpoint UPSERT semantics, read-path correctness with realistic mixed-state data, batch operations up to 1500 rows, multi-threaded concurrent writes, and the step_run_id parse helper.
 - [ ] **Implement `DualStepRunRepo`** — same dual-write pattern as `DualEventRepo`, but with read methods that go to the primary (SQLite). **This is where the consistency-race bug is fixed structurally.**
 - [ ] **`make_step_run_repo` factory** + composition root wiring. `FACTORY_STORAGE_STEP_RUNS` env var. Default `firestore`.
 - [ ] **Integration tests** — orchestrator runs against the dual repo, verify reads come from SQLite (no race), writes land in both, mirror failures don't break the pipeline.
