@@ -173,6 +173,38 @@ class StateTransitionTests(_StepRunRepoTestBase):
         self.assertEqual(decoded, {"word_count": 240, "title": "안녕"})
         self.assertIsNotNone(row[2])
 
+    def test_mark_succeeded_with_datetime_in_output_does_not_crash(self):
+        """Regression test for the 2026-05-16 production crash class.
+
+        Real step outputs include datetime objects (e.g. generated_at,
+        rendered_at timestamps). Without a default= encoder, json.dumps
+        crashes with TypeError. Pinned at the step_run layer separately
+        from the event-repo pin so neither code path can silently
+        regress. See worker/LOCAL_STORAGE_MIGRATION.md.
+        """
+        import datetime as _dt
+        self.repo.mark_running(self.sid, "q1", "worker-1")
+        output = {
+            "word_count": 240,
+            "title": "안녕",
+            "generated_at": _dt.datetime(2026, 5, 16, 12, 26, 12,
+                                         tzinfo=_dt.timezone.utc),
+            "shard_keys_used": {"a", "b"},
+        }
+        # This call would raise TypeError before the fix.
+        self.repo.mark_succeeded(self.sid, output)
+        row = self.repo._conn.execute(
+            "SELECT state, output FROM factory_step_runs WHERE step_run_id = ?",
+            (self.sid,),
+        ).fetchone()
+        self.assertEqual(row[0], "succeeded")
+        decoded = json.loads(row[1])
+        self.assertEqual(decoded["generated_at"], "2026-05-16T12:26:12+00:00")
+        self.assertEqual(sorted(decoded["shard_keys_used"]), ["a", "b"])
+        # Primitive fields survive intact.
+        self.assertEqual(decoded["word_count"], 240)
+        self.assertEqual(decoded["title"], "안녕")
+
     def test_mark_failed_records_error(self):
         self.repo.mark_running(self.sid, "q1", "worker-1")
         self.repo.mark_failed(self.sid, "tts_unavailable", "LM Studio returned 503")
@@ -252,6 +284,37 @@ class CheckpointTests(_StepRunRepoTestBase):
             "SELECT COUNT(*) FROM factory_step_runs"
         ).fetchone()
         self.assertEqual(count[0], 0)
+
+    def test_batch_mark_succeeded_from_checkpoint_with_datetime_output(self):
+        """Regression test: the batch UPSERT path also needs the
+        datetime-tolerant encoder. The restart-latency win lives here
+        (Phase 2 commit d8424f96) so it MUST not crash on real
+        outputs. Pinned separately from mark_succeeded_from_checkpoint
+        because the batch path goes through its own code site."""
+        import datetime as _dt
+        entries = [
+            (
+                "job1", "job1-r1", "synthesize_audio_chunk", f"chunk-{i}",
+                {
+                    "uri": f"gs://bucket/chunk-{i}.wav",
+                    "rendered_at": _dt.datetime(2026, 5, 16, 12, i, 0,
+                                                tzinfo=_dt.timezone.utc),
+                    "voices_used": {"alice", "bob"},
+                },
+            )
+            for i in range(3)
+        ]
+        # Would raise TypeError before the fix.
+        self.repo.batch_mark_succeeded_from_checkpoint(entries)
+        rows = self.repo._conn.execute(
+            "SELECT shard_key, output FROM factory_step_runs "
+            "WHERE step_name = 'synthesize_audio_chunk' ORDER BY shard_key"
+        ).fetchall()
+        self.assertEqual(len(rows), 3)
+        for shard_key, output_json in rows:
+            decoded = json.loads(output_json)
+            self.assertTrue(decoded["rendered_at"].startswith("2026-05-16T12:"))
+            self.assertEqual(sorted(decoded["voices_used"]), ["alice", "bob"])
 
     def test_batch_handles_large_input_in_one_transaction(self):
         """The Firestore version chunks at 500 (its API limit); SQLite has

@@ -109,6 +109,80 @@ class SqliteEventRepoTests(unittest.TestCase):
         finally:
             repo.close()
 
+    def test_payload_with_datetime_does_not_crash(self) -> None:
+        """Regression test for the 2026-05-16 production crash.
+
+        Real claim_loop payloads include datetime objects (started_at,
+        deadline_at, heartbeat_at). The shipped SqliteEventRepo called
+        json.dumps without a default= encoder and crashed with
+        TypeError on the very first real emit. The fix is _json_dumps
+        with _json_default — this test pins it so we cannot ship that
+        bug again.
+
+        See worker/LOCAL_STORAGE_MIGRATION.md "Phase 1 lessons from the
+        2026-05-16 real-run validation attempt" for the full story.
+        """
+        import datetime as _dt
+        repo = self._make_repo()
+        try:
+            # Shape mirrors what claim_loop actually passes.
+            payload = {
+                "step_name": "generate_script",
+                "attempt": 1,
+                "worker_id": "test",
+                "started_at": _dt.datetime(2026, 5, 16, 12, 26, 12,
+                                          tzinfo=_dt.timezone.utc),
+                "deadline_at": _dt.datetime(2026, 5, 16, 12, 31, 12,
+                                            tzinfo=_dt.timezone.utc),
+                "shard_keys": {"a", "b", "c"},  # sets also fail by default
+            }
+            # This call would raise TypeError before the fix.
+            event_id = repo.emit("step_started", "job-1", "job-1-r1", payload)
+            self.assertTrue(event_id)
+            # Round-trip: the datetimes land as ISO-8601 strings, sets
+            # as JSON arrays. Both are losslessly recoverable from the
+            # admin UI side.
+            conn = sqlite3.connect(str(self.db_path))
+            (raw,) = conn.execute(
+                "SELECT payload FROM factory_events WHERE id = ?", (event_id,),
+            ).fetchone()
+            conn.close()
+            import json as _json
+            decoded = _json.loads(raw)
+            self.assertEqual(decoded["started_at"], "2026-05-16T12:26:12+00:00")
+            self.assertEqual(decoded["deadline_at"], "2026-05-16T12:31:12+00:00")
+            self.assertEqual(sorted(decoded["shard_keys"]), ["a", "b", "c"])
+            # The primitives we already pin must still survive intact.
+            self.assertEqual(decoded["step_name"], "generate_script")
+            self.assertEqual(decoded["attempt"], 1)
+        finally:
+            repo.close()
+
+    def test_payload_with_unknown_type_falls_back_to_str_not_crash(self) -> None:
+        """The encoder is permissive by design — see _json_default's
+        docstring. An unknown type degrades to str(obj) rather than
+        crashing, so future payload-shape changes don't take the worker
+        down. Pinned because the temptation to "be strict and raise on
+        unknown types" would reopen the production crash class."""
+
+        class _Weird:
+            def __str__(self) -> str:
+                return "weird-value"
+
+        repo = self._make_repo()
+        try:
+            event_id = repo.emit(
+                "test", "job-1", "job-1-r1", {"weird": _Weird()},
+            )
+            conn = sqlite3.connect(str(self.db_path))
+            (raw,) = conn.execute(
+                "SELECT payload FROM factory_events WHERE id = ?", (event_id,),
+            ).fetchone()
+            conn.close()
+            self.assertIn("weird-value", raw)
+        finally:
+            repo.close()
+
     # ----------------------- concurrency -----------------------
 
     def test_concurrent_writers_do_not_corrupt(self) -> None:

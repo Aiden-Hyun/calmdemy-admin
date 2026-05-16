@@ -26,6 +26,7 @@ Connection model:
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import os
 import sqlite3
@@ -33,6 +34,53 @@ import threading
 import time
 import uuid
 from pathlib import Path
+
+
+def _json_default(obj):
+    """Permissive JSON encoder for SQLite-bound payloads.
+
+    The default ``json.dumps`` chokes on common types that ``FirestoreEventRepo``
+    handled natively via the Firestore SDK — notably ``datetime``, ``date``,
+    and ``set``. The real ``claim_loop`` event payloads include
+    ``started_at`` / ``deadline_at`` / heartbeat datetime fields, so the
+    plain ``json.dumps`` site we shipped in Phase 1 crashed in production
+    on the very first emit (2026-05-16 — see LOCAL_STORAGE_MIGRATION.md).
+
+    Design choice: be PERMISSIVE here, not strict. This module backs an
+    audit/state log — losing some fidelity on a weird value is strictly
+    better than crashing the worker mid-step. Known types get a
+    Firestore-compatible string form (``isoformat()`` for datetimes);
+    unknown types fall back to ``str(obj)`` so payloads with previously
+    unseen shapes degrade gracefully instead of taking the worker down.
+
+    If a future caller passes something we silently stringify but
+    actually wanted preserved, that's caught by a parity check (compare
+    the round-tripped value back from SQLite) rather than by a crash.
+    """
+    if isinstance(obj, (_dt.datetime, _dt.date, _dt.time)):
+        return obj.isoformat()
+    if isinstance(obj, (set, frozenset)):
+        return list(obj)
+    if isinstance(obj, bytes):
+        try:
+            return obj.decode("utf-8")
+        except UnicodeDecodeError:
+            return obj.hex()
+    return str(obj)
+
+
+def _json_dumps(obj) -> str:
+    """Single canonical JSON encoder used by every SQLite write site.
+
+    Keeps the encoding flags consistent (``ensure_ascii=False`` for
+    readable Korean / Japanese text; compact separators) and threads
+    ``_json_default`` through every site. Always use this instead of
+    calling ``json.dumps`` directly — that mistake is what caused the
+    2026-05-16 datetime crash.
+    """
+    return json.dumps(
+        obj, separators=(",", ":"), ensure_ascii=False, default=_json_default,
+    )
 
 
 def _default_db_path() -> Path:
@@ -168,9 +216,10 @@ class SqliteEventRepo:
         event_id = uuid.uuid4().hex
         created_at = time.time()
         # JSON payload is encoded once here so callers don't have to
-        # think about the wire format. ensure_ascii=False keeps unicode
-        # (e.g. Korean text in meditation scripts) readable in the file.
-        payload_json = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+        # think about the wire format. _json_dumps adds datetime/set/
+        # bytes handling on top of the readable-unicode default — see
+        # _json_default's docstring for why that's load-bearing.
+        payload_json = _json_dumps(payload)
         with self._lock:
             self._conn.execute(
                 "INSERT INTO factory_events "
@@ -343,7 +392,7 @@ class SqliteStepRunRepo:
     def mark_succeeded(self, step_run_id: str, output: dict) -> None:
         """Record success + the step's output dict (JSON-encoded)."""
         now = time.time()
-        payload = json.dumps(output or {}, separators=(",", ":"), ensure_ascii=False)
+        payload = _json_dumps(output or {})
         with self._lock:
             self._conn.execute(
                 """
@@ -367,7 +416,7 @@ class SqliteStepRunRepo:
         run_id, step_name, shard_key = self._parse_step_run_id(step_run_id)
         job_id = self._lookup_job_id(step_run_id) or ""
         now = time.time()
-        payload = json.dumps(output or {}, separators=(",", ":"), ensure_ascii=False)
+        payload = _json_dumps(output or {})
         with self._lock:
             self._conn.execute(
                 """
@@ -415,7 +464,7 @@ class SqliteStepRunRepo:
         rows = []
         for job_id, run_id, step_name, shard_key, output in entries:
             step_run_id = self.make_step_run_id(run_id, step_name, shard_key)
-            payload = json.dumps(output or {}, separators=(",", ":"), ensure_ascii=False)
+            payload = _json_dumps(output or {})
             rows.append((
                 step_run_id, job_id, run_id, step_name, shard_key,
                 payload,
