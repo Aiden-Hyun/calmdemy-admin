@@ -8,7 +8,7 @@
     "acceptNonTtsSteps": true,
     "ttsModels": ["gemini-tts-flash", "gemini-tts-pro"],
     "extraCapabilityKeys": [],
-    "memoryPerWorkerMB": 2000
+    "memoryPerWorkerMB": 9000
   },
   {
     "id": "local-image",
@@ -19,7 +19,7 @@
     "acceptNonTtsSteps": false,
     "ttsModels": [],
     "extraCapabilityKeys": ["image"],
-    "memoryPerWorkerMB": 12000
+    "memoryPerWorkerMB": 8000
   },
   {
     "id": "local-tts-qwen",
@@ -31,7 +31,7 @@
     "acceptNonTtsSteps": false,
     "ttsModels": ["qwen3-base"],
     "extraCapabilityKeys": [],
-    "memoryPerWorkerMB": 3500
+    "memoryPerWorkerMB": 5000
   },
   {
     "id": "local-tts-moss",
@@ -43,18 +43,6 @@
     "acceptNonTtsSteps": false,
     "ttsModels": ["moss-tts"],
     "extraCapabilityKeys": [],
-    "memoryPerWorkerMB": 3500
-  },
-  {
-    "id": "local-qc",
-    "role": "qc",
-    "venv": ".venv-qc",
-    "replicas": 1,
-    "enabled": true,
-    "dispatch": false,
-    "acceptNonTtsSteps": false,
-    "ttsModels": [],
-    "extraCapabilityKeys": ["qc"],
-    "memoryPerWorkerMB": 4000
+    "memoryPerWorkerMB": 6000
   }
 ]

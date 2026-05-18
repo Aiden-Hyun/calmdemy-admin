@@ -1,8 +1,0 @@
-# Shared local worker runtime dependencies (firebase_admin, google-cloud-*, etc.)
-# Required so local_worker.py can boot inside .venv-qc; without -r, the worker
-# crashes on `import firebase_admin` and the local-qc stack restarts in a tight loop.
--r requirements.base.txt
-
-# Audio QC: Whisper transcription + digit-to-word expansion.
-openai-whisper
-num2words

@@ -37,14 +37,6 @@ IMAGE_STEP_NAMES = {
     "generate_course_thumbnail",
 }
 
-# Steps that require a Whisper transcription stack (audio QC).
-# Routed to workers advertising the "qc" extra capability — typically a
-# dedicated venv (see worker_stacks.json: local-qc).
-QC_STEP_NAMES = {
-    "qc_audio_chunk",
-    "qc_course_audio_chunk",
-}
-
 
 def normalize_tts_model(tts_model: str | None) -> str:
     """Lowercase and strip a TTS model name for case-insensitive comparison."""
@@ -61,11 +53,6 @@ def is_image_step(step_name: str | None) -> bool:
     return str(step_name or "").strip() in IMAGE_STEP_NAMES
 
 
-def is_qc_step(step_name: str | None) -> bool:
-    """Return True if *step_name* is one of the audio QC pipeline steps."""
-    return str(step_name or "").strip() in QC_STEP_NAMES
-
-
 def capability_key_for_step(
     step_name: str | None,
     required_tts_model: str | None = None,
@@ -74,7 +61,6 @@ def capability_key_for_step(
 
     The returned key follows a simple taxonomy:
         - ``"image"``       -- needs an image-generation GPU
-        - ``"qc"``          -- needs a Whisper transcription stack
         - ``"tts:<model>"`` -- needs a specific TTS model loaded
         - ``"tts:any"``     -- needs *some* TTS model, any will do
         - ``"default"``     -- no special hardware required (LLM, QA, upload, etc.)
@@ -82,11 +68,8 @@ def capability_key_for_step(
     if is_image_step(step_name):
         return "image"
 
-    if is_qc_step(step_name):
-        return "qc"
-
     if not is_tts_step(step_name):
-        # Non-TTS, non-image, non-QC steps are "default" (CPU-only work)
+        # Non-TTS, non-image steps are "default" (CPU-only work)
         return "default"
 
     # TTS step -- pin to a specific model when the job requires one

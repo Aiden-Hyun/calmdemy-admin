@@ -155,18 +155,6 @@ class _ConfigurableStepRunRepo:
         if payload:
             self._succeeded.add(payload)
 
-    def batch_mark_succeeded_from_checkpoint(
-        self,
-        entries: list[tuple[str, str, str, str, dict]],
-    ) -> None:
-        # Batched equivalent of ensure_ready + mark_succeeded_from_checkpoint.
-        # Mirrors the production semantics in firestore_repos.py so tests
-        # remain valid against the optimized callsites in orchestrator.py.
-        for job_id, run_id, step_name, shard_key, _output in entries:
-            step_run_id = f"{run_id}__{step_name}__{shard_key}"
-            self._ready[step_run_id] = (job_id, run_id, step_name)
-            self._succeeded.add((job_id, run_id, step_name))
-
 
 class CourseScriptApprovalTests(unittest.TestCase):
     def test_initial_course_script_approval_pauses_after_script_generation(self) -> None:
@@ -364,14 +352,6 @@ class CourseScriptApprovalTests(unittest.TestCase):
         ensure_step_enqueued.assert_called_once()
         self.assertEqual(ensure_step_enqueued.call_args.args[-2:], ("run-1", "publish_course"))
 
-    @unittest.skip(
-        "Known gap: orchestrator does not gate publish_course on thumbnail "
-        "regeneration. on_step_success for upload_course_audio at "
-        "factory_v2/application/orchestrator.py:1599-1601 unconditionally "
-        "enqueues publish_course; needs a check on "
-        "_course_thumbnail_generation_requested(job) before enqueue. "
-        "Tracked as part of course-pipeline cleanup; un-skip when fixed."
-    )
     def test_orchestrator_waits_for_regenerated_thumbnail_before_publish(self) -> None:
         job = {
             "job_type": "course",
@@ -397,12 +377,6 @@ class CourseScriptApprovalTests(unittest.TestCase):
 
         ensure_step_enqueued.assert_not_called()
 
-    @unittest.skip(
-        "Known gap: recover_course_publish_if_ready does not check "
-        "_course_thumbnail_generation_requested(job) and so re-enqueues "
-        "publish_course even when a thumbnail regen is pending. "
-        "Same root cause as test_orchestrator_waits_for_regenerated_thumbnail_before_publish."
-    )
     def test_recovery_waits_for_regenerated_thumbnail_before_publish(self) -> None:
         job = {
             "job_type": "course",

@@ -59,7 +59,6 @@ EXECUTOR_PATHS: dict[str, tuple[str, str]] = {
     "generate_image": ("single_content", "execute_generate_image"),
     "synthesize_audio": ("single_content", "execute_synthesize_audio"),
     "synthesize_audio_chunk": ("single_content", "execute_synthesize_audio_chunk"),
-    "qc_audio_chunk": ("single_content", "execute_qc_audio_chunk"),
     "assemble_audio": ("single_content", "execute_assemble_audio"),
     "post_process_audio": ("single_content", "execute_post_process_audio"),
     "upload_audio": ("single_content", "execute_upload_audio"),

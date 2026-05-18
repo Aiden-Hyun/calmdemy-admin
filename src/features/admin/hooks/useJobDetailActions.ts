@@ -39,12 +39,7 @@ import {
   useJobDetail,
   useJobStepTimeline,
 } from './useJobQueue';
-import {
-  publishCompletedJob,
-  updateJobTitle,
-  regenerateSingleContentScript,
-  saveAndRestartSingleContent,
-} from '../data/adminRepository';
+import { publishCompletedJob, updateJobTitle, regenerateSingleContentScript } from '../data/adminRepository';
 import { CourseRegenerationMode } from '../types';
 
 /**
@@ -328,41 +323,6 @@ export function useJobDetailActions(jobId: string | undefined) {
     await regenerateSingleContentScript(job, script);
   }, [job]);
 
-  /**
-   * Save edits + (re)start the job from any state — including in-flight,
-   * pending, or paused. Composes the admin-cancel signal with a fresh
-   * dispatch so the user doesn't have to manually click Cancel first.
-   *
-   * Shows a confirmation dialog only when the job is mid-synthesis
-   * (status indicates active work that could be lost). Skips the dialog
-   * for `pending` (nothing started yet) and terminal states.
-   *
-   * Once we project `qcParked` from factory_jobs to content_jobs we can
-   * also skip the dialog for parked runs.
-   */
-  const handleSaveAndRestartSingleScript = useCallback(async (script: string) => {
-    if (!job) return;
-    const inFlightStatuses = new Set([
-      'llm_generating',
-      'qa_formatting',
-      'image_generating',
-      'tts_pending',
-      'tts_converting',
-      'post_processing',
-      'uploading',
-      'publishing',
-      'paused',
-    ]);
-    if (inFlightStatuses.has(job.status)) {
-      const ok = await confirmAction(
-        'Cancel the current run and start a new one with your edits?\n\n' +
-          'In-progress synthesis will be discarded and the job will re-render from your edited script.'
-      );
-      if (!ok) return;
-    }
-    await saveAndRestartSingleContent(job, script);
-  }, [job]);
-
   // Derived flags (same logic as app/admin/job/[id].tsx).
   const isCourseRegenAwaitingPublish =
     job?.contentType === 'course' &&
@@ -446,6 +406,5 @@ export function useJobDetailActions(jobId: string | undefined) {
     handleReview,
     handleUpdateTitle,
     handleRegenerateSingleScript,
-    handleSaveAndRestartSingleScript,
   };
 }

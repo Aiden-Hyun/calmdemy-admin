@@ -54,7 +54,6 @@ from ..infrastructure.firestore_repos import (
     FirestoreStepRunRepo,
 )
 from ..infrastructure.queue_repo import FirestoreQueueRepo
-from ..infrastructure.dual_repos import make_event_repo, make_step_run_repo
 
 logger = get_logger(__name__)
 
@@ -120,20 +119,9 @@ class WorkerMain:
         # --- Repository layer (infrastructure adapters) ---
         self.job_repo = FirestoreJobRepo(db)
         self.run_repo = FirestoreRunRepo(db)
-        # step_run_repo is factory-resolved so FACTORY_STORAGE_STEP_RUNS
-        # can flip backends per-collection. Default ("firestore") preserves
-        # the prior behavior; "dual" enables SQLite primary + Firestore
-        # mirror (the mode that structurally closes the eventual-consistency
-        # race patched surgically in 43f4e7b9); "sqlite" disables the mirror
-        # entirely (offline mode). See worker/LOCAL_STORAGE_MIGRATION.md.
-        self.step_run_repo = make_step_run_repo(db)
+        self.step_run_repo = FirestoreStepRunRepo(db)
         self.queue_repo = FirestoreQueueRepo(db)
-        # events repo is factory-resolved so FACTORY_STORAGE_EVENTS can
-        # flip backends per-collection. Default ("firestore") preserves
-        # the prior behavior; "dual" enables SQLite primary + Firestore
-        # mirror; "sqlite" disables the mirror entirely (offline mode).
-        # See worker/LOCAL_STORAGE_MIGRATION.md for the migration plan.
-        self.event_repo = make_event_repo(db)
+        self.event_repo = FirestoreEventRepo(db)
         # --- Application-layer orchestrator (the "hexagon") ---
         self.orchestrator = Orchestrator(
             self.job_repo,

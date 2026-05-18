@@ -585,73 +585,16 @@ def _queue_payload_counts_as_live_work(
     now: datetime,
 ) -> bool:
     """
-    Determine if a queue entry represents work the autoscaler should react to.
+    Determine if a queue entry represents genuine in-progress or pending work.
 
-    Counts:
-      - ``ready``  — waiting for any worker
-      - ``leased`` / ``running`` with a healthy owner heartbeat that's on
-        this specific item (or grace-period recent) — being processed
-      - ``leased`` / ``running`` with **no owner** or with a **stale owner
-        heartbeat** (worker died) — needs a replacement worker. Without
-        counting this case, a worker death silently strands its in-flight
-        items until the lease expires (minutes), and any capability-
-        specific stack whose only work is dead-leased items looks like it
-        has zero outstanding work and never gets respawned.
-
-    Doesn't count:
-      - terminal states (succeeded / failed / cancelled)
-      - leased/running orphans whose owner *is* alive but processing
-        something else and the item itself is stale — recovery will
-        reset to ``ready`` and the existing healthy worker will pick
-        it up; no need to spawn extra capacity.
+    A step that's "leased" or "running" only counts if its owner worker has
+    a fresh heartbeat — otherwise the worker likely crashed and the step is
+    orphaned (the recovery manager will handle it separately).  "ready"
+    steps always count because they're waiting for a worker to pick them up.
     """
     state = str(payload.get("state") or "").strip().lower()
     if state == "ready":
         return True
-    if state not in {"leased", "running"}:
-        return False
-
-    owner = str(payload.get("lease_owner") or "").strip()
-    if not owner:
-        # No recorded owner — orphaned. Count so a worker can pick it up
-        # after recovery resets the lease.
-        return True
-
-    status = worker_status_by_id.get(owner)
-    if not _worker_status_heartbeat_is_fresh(status, now):
-        # Owner heartbeat is stale → worker is dead. The item is orphaned
-        # and needs a replacement worker.
-        return True
-
-    # Owner is alive. Is it actually on THIS item?
-    queue_id = str(payload.get("_queue_id") or "").strip()
-    current_queue_id = str((status or {}).get("currentQueueId") or "").strip()
-    if queue_id and current_queue_id == queue_id:
-        return True
-    if current_queue_id:
-        # Worker is healthy but on a different item. This item is a stale
-        # orphan; recovery will reset it and the same healthy worker can
-        # pick it up. No need to count it as needing fresh capacity.
-        return False
-    # No currentQueueId set on worker_status — fall back to recency window
-    # (covers the brief gap between claim and first heartbeat).
-    return _queue_payload_is_recent(payload, now)
-
-
-def _queue_payload_owner_is_alive(
-    payload: dict,
-    *,
-    worker_status_by_id: dict[str, dict],
-    now: datetime,
-) -> bool:
-    """
-    True iff a healthy worker is currently processing this queue item.
-
-    Used to populate ``active_owners`` (workers the memory guard must not
-    evict) — orthogonal to whether the item *needs* a worker (which
-    ``_queue_payload_counts_as_live_work`` answers).
-    """
-    state = str(payload.get("state") or "").strip().lower()
     if state not in {"leased", "running"}:
         return False
 
@@ -684,7 +627,6 @@ def _collect_auto_workload_from_payloads(
     Scans the factory step queue and counts outstanding steps per category:
       - non_tts_outstanding: script generation, formatting, upload, etc.
       - image_outstanding: image generation steps.
-      - qc_outstanding: audio QC steps (Whisper transcription).
       - tts_outstanding: per-model TTS step counts (e.g. {"qwen3-base": 3}).
       - wildcard_tts_outstanding: TTS steps with no specific model preference.
       - active_owners: set of worker IDs currently leasing a step.
@@ -696,7 +638,6 @@ def _collect_auto_workload_from_payloads(
     wildcard_tts_outstanding = 0
     non_tts_outstanding = 0
     image_outstanding = 0
-    qc_outstanding = 0
     active_owners: set[str] = set()
 
     for payload in queue_payloads:
@@ -708,24 +649,13 @@ def _collect_auto_workload_from_payloads(
         ):
             continue
 
-        # Track active_owners only for items whose owner is *actually alive*.
-        # Items leased to a dead worker should not protect that worker from
-        # eviction (it's already dead) and shouldn't suppress respawn either.
-        if _queue_payload_owner_is_alive(
-            payload,
-            worker_status_by_id=worker_status_by_id,
-            now=now,
-        ):
-            lease_owner = str(payload.get("lease_owner") or "").strip()
-            if lease_owner:
-                active_owners.add(lease_owner)
+        lease_owner = str(payload.get("lease_owner") or "").strip()
+        if state in {"leased", "running"} and lease_owner:
+            active_owners.add(lease_owner)
 
         capability_key = capability_key_for_payload(payload)
         if capability_key == "image":
             image_outstanding += 1
-            continue
-        if capability_key == "qc":
-            qc_outstanding += 1
             continue
         if not capability_key.startswith("tts:"):
             non_tts_outstanding += 1
@@ -746,14 +676,12 @@ def _collect_auto_workload_from_payloads(
         "delete_jobs": False,
         "non_tts_outstanding": non_tts_outstanding,
         "image_outstanding": image_outstanding,
-        "qc_outstanding": qc_outstanding,
         "tts_outstanding": dict(tts_outstanding),
         "wildcard_tts_outstanding": wildcard_tts_outstanding,
         "active_owners": active_owners,
         "has_any_work": (
             non_tts_outstanding > 0
             or image_outstanding > 0
-            or qc_outstanding > 0
             or wildcard_tts_outstanding > 0
             or any(tts_outstanding.values())
         ),
@@ -788,7 +716,6 @@ def _collect_auto_workload(db) -> dict:
         or delete_jobs
         or workload["non_tts_outstanding"] > 0
         or workload["image_outstanding"] > 0
-        or workload.get("qc_outstanding", 0) > 0
         or workload["wildcard_tts_outstanding"] > 0
         or any(workload["tts_outstanding"].values())
     )
@@ -1110,20 +1037,6 @@ def _desired_auto_stack_ids(
             _pick_stack_ids(
                 image_candidates,
                 needed_count=min(1, len(image_candidates)),
-                running_ids=running_ids,
-                active_owners=active_owners,
-                selected_ids=desired_ids,
-            )
-        )
-
-    if workload.get("qc_outstanding", 0) > 0:
-        qc_candidates = [
-            stack for stack in enabled_stacks if "qc" in stack_capability_keys(stack)
-        ]
-        desired_ids.update(
-            _pick_stack_ids(
-                qc_candidates,
-                needed_count=min(1, len(qc_candidates)),
                 running_ids=running_ids,
                 active_owners=active_owners,
                 selected_ids=desired_ids,

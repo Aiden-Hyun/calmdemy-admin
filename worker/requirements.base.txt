@@ -27,9 +27,3 @@ mutagen==1.*
 
 # Utilities
 python-dotenv==1.*
-psutil>=5.9
-
-# Audio QC text normalization (digit→word expansion). Pure Python, ~200KB.
-# Used by factory_v2/shared/audio_qc.py (importable from any stack so the
-# orchestrator can read QC verdicts without pulling Whisper).
-num2words>=0.5

@@ -42,7 +42,6 @@ Consumed By:
 
 from __future__ import annotations
 
-import logging
 import os
 from datetime import datetime, timezone
 
@@ -71,28 +70,10 @@ COURSE_AUDIO_SHARDS = ("INT", "M1L", "M1P", "M2L", "M2P", "M3L", "M3P", "M4L", "
 # Step names referenced across fan-out/fan-in logic.
 COURSE_AUDIO_CHUNK_STEP = "synthesize_course_audio_chunk"
 SINGLE_AUDIO_CHUNK_STEP = "synthesize_audio_chunk"
-SINGLE_AUDIO_QC_STEP = "qc_audio_chunk"
 SINGLE_AUDIO_ASSEMBLE_STEP = "assemble_audio"
 
 # Scripts shorter than this word count use the linear (non-chunked) TTS path.
 SINGLE_CONTENT_CHUNK_MIN_WORDS = int(os.getenv("SINGLE_CONTENT_CHUNK_MIN_WORDS", "200"))
-
-# Maximum auto-retries per chunk on QC FAIL. After this, the job parks for
-# human review (no auto-retry, no auto-pass — operator must intervene).
-SINGLE_AUDIO_QC_MAX_ATTEMPTS = int(os.getenv("FACTORY_QC_MAX_ATTEMPTS", "3"))
-
-
-def _qc_enabled() -> bool:
-    """Whether to route synth-chunk fan-in through QC before assembly.
-
-    Controlled by ``FACTORY_QC_ENABLED`` env var. Defaults to ON so the
-    admin UI is zero-config — set ``FACTORY_QC_ENABLED=false`` to bypass
-    QC and go straight from synth to assembly (legacy behavior).
-    """
-    return str(os.getenv("FACTORY_QC_ENABLED", "true")).strip().lower() in ("1", "true", "yes", "on")
-
-
-logger = logging.getLogger(__name__)
 
 
 class Orchestrator:
@@ -454,12 +435,6 @@ class Orchestrator:
         # (audio, publish) are handled by the orchestrator dynamically.
         pipeline_order = ["generate_script", "format_script", "generate_image"]
 
-        # Collect entries first, then commit in one Firestore batch. The
-        # previous serial pattern (ensure_ready + mark_succeeded_from_checkpoint
-        # per step) cost two round-trips per reused step — for a heavily-
-        # retried job that's the dominant restart latency. See
-        # batch_mark_succeeded_from_checkpoint for details.
-        entries: list[tuple[str, str, str, str, dict]] = []
         for step_name in pipeline_order:
             # Stop seeding once we reach the step we're about to execute.
             if step_name == first_step:
@@ -470,23 +445,25 @@ class Orchestrator:
                 pass  # fall through to checkpoint it below
             if not checkpointable.get(step_name):
                 continue
-            entries.append((job_id, run_id, step_name, "root", {"reused_from_checkpoint": True}))
+            step_run_id = self.step_run_repo.ensure_ready(job_id, run_id, step_name)
+            self.step_run_repo.mark_succeeded_from_checkpoint(
+                step_run_id,
+                {"reused_from_checkpoint": True},
+            )
 
         # For _resume_after_image, also checkpoint generate_image itself.
         if (
             first_step == self._SINGLE_CONTENT_RESUME_AFTER_IMAGE
             and checkpointable.get("generate_image")
         ):
-            entries.append((
-                job_id, run_id, "generate_image", "root",
+            step_run_id = self.step_run_repo.ensure_ready(job_id, run_id, "generate_image")
+            self.step_run_repo.mark_succeeded_from_checkpoint(
+                step_run_id,
                 {
                     "reused_from_checkpoint": True,
                     "thumbnail_url": str(runtime.get("thumbnail_url") or ""),
                 },
-            ))
-
-        if entries:
-            self.step_run_repo.batch_mark_succeeded_from_checkpoint(entries)
+            )
 
     def _seed_course_checkpoint_steps(
         self,
@@ -515,26 +492,35 @@ class Orchestrator:
         }:
             return
 
-        # Same batched-write pattern as the single-content checkpoint seed
-        # above. Combines up to two writes into one Firestore round-trip.
-        entries: list[tuple[str, str, str, str, dict]] = []
-
         thumbnail_url = self._course_thumbnail_url(job)
         thumbnail_regeneration_requested = self._course_thumbnail_generation_requested(job)
         if thumbnail_url and not thumbnail_regeneration_requested:
-            entries.append((
-                job_id, run_id, "generate_course_thumbnail", "root",
-                {"reused_from_checkpoint": True, "thumbnail_url": thumbnail_url},
-            ))
+            step_run_id = self.step_run_repo.ensure_ready(
+                job_id,
+                run_id,
+                "generate_course_thumbnail",
+            )
+            self.step_run_repo.mark_succeeded_from_checkpoint(
+                step_run_id,
+                {
+                    "reused_from_checkpoint": True,
+                    "thumbnail_url": thumbnail_url,
+                },
+            )
 
         if self._course_has_uploaded_audio(job):
-            entries.append((
-                job_id, run_id, "upload_course_audio", "root",
-                {"reused_from_checkpoint": True, "audio_reused": True},
-            ))
-
-        if entries:
-            self.step_run_repo.batch_mark_succeeded_from_checkpoint(entries)
+            upload_step_run_id = self.step_run_repo.ensure_ready(
+                job_id,
+                run_id,
+                "upload_course_audio",
+            )
+            self.step_run_repo.mark_succeeded_from_checkpoint(
+                upload_step_run_id,
+                {
+                    "reused_from_checkpoint": True,
+                    "audio_reused": True,
+                },
+            )
 
     @staticmethod
     def _completed_course_audio_shards(job: dict) -> set[str]:
@@ -818,18 +804,23 @@ class Orchestrator:
 
         if completed_shards:
             # Surface checkpoint-reused shards in this run's timeline so UI does not
-            # show them as "waiting" when they are already completed. Batched
-            # write so 9 shard re-mark = 1 Firestore round-trip (was 18 serial).
-            entries: list[tuple[str, str, str, str, dict]] = [
-                (
-                    job_id, run_id, "synthesize_course_audio", shard,
-                    {"reused_from_checkpoint": True, "session_code": shard},
+            # show them as "waiting" when they are already completed.
+            for shard in COURSE_AUDIO_SHARDS:
+                if shard not in completed_shards:
+                    continue
+                step_run_id = self.step_run_repo.ensure_ready(
+                    job_id,
+                    run_id,
+                    "synthesize_course_audio",
+                    shard_key=shard,
                 )
-                for shard in COURSE_AUDIO_SHARDS
-                if shard in completed_shards
-            ]
-            if entries:
-                self.step_run_repo.batch_mark_succeeded_from_checkpoint(entries)
+                self.step_run_repo.mark_succeeded_from_checkpoint(
+                    step_run_id,
+                    {
+                        "reused_from_checkpoint": True,
+                        "session_code": shard,
+                    },
+                )
 
         missing_shards = [shard for shard in COURSE_AUDIO_SHARDS if shard not in completed_shards]
 
@@ -1068,20 +1059,9 @@ class Orchestrator:
             )
 
     def _maybe_enqueue_single_audio_assembly(
-        self,
-        job: dict,
-        job_id: str,
-        run_id: str,
-        just_succeeded_shard: str | None = None,
+        self, job: dict, job_id: str, run_id: str,
     ) -> bool:
-        """Enqueue ``assemble_audio`` once all chunk shards have succeeded.
-
-        ``just_succeeded_shard`` lets the on_step_success caller close the
-        Firestore eventual-consistency race for the *last* chunk: the
-        index-backed ``succeeded_shard_keys`` query may not see the
-        write that triggered this hook. See
-        ``_maybe_fan_out_single_audio_qc`` for the full explanation.
-        """
+        """Enqueue ``assemble_audio`` once all chunk shards have succeeded."""
         expected = set(self._single_audio_chunk_shards(job))
         if not expected:
             return False
@@ -1095,324 +1075,11 @@ class Orchestrator:
         succeeded = self.step_run_repo.succeeded_shard_keys(
             job_id, run_id, SINGLE_AUDIO_CHUNK_STEP,
         )
-        if just_succeeded_shard:
-            succeeded = succeeded | {just_succeeded_shard}
         if not expected.issubset(succeeded):
             return False
 
         self._ensure_step_enqueued(job, job_id, run_id, SINGLE_AUDIO_ASSEMBLE_STEP)
         return True
-
-    # ------------------------------------------------------------------
-    # Single-content audio QC (orchestrator-managed, gated by FACTORY_QC_ENABLED)
-    # ------------------------------------------------------------------
-
-    def _maybe_fan_out_single_audio_qc(
-        self,
-        job: dict,
-        job_id: str,
-        run_id: str,
-        just_succeeded_shard: str | None = None,
-    ) -> bool:
-        """Fan out QC for every chunk once all synth chunks have succeeded.
-
-        Mirrors ``_maybe_enqueue_single_audio_assembly`` but instead of going
-        straight to assembly it enqueues one ``qc_audio_chunk`` queue item
-        per chunk shard. The QC step verdicts then drive
-        ``_evaluate_single_audio_qc``.
-
-        Defensive WAV check: a synth step_run can be marked succeeded from a
-        prior run via ``mark_succeeded_from_checkpoint`` (smart-retry / resume
-        path), but chunk WAVs live in ``/tmp/calmdemy_single_tts/<job_id>/``
-        which doesn't survive a system reboot or tmp cleanup. If the WAV is
-        gone, QC would fail with FileNotFoundError and the run would die.
-        Instead, detect missing WAVs here and re-render synth for those
-        chunks via the standard retry path.
-        """
-        from factory_v2.shared.course_tts_chunks import single_chunk_wav_path
-
-        expected = list(enumerate(self._single_audio_chunk_shards(job)))
-        if not expected:
-            return False
-
-        expected_set = {shard for _, shard in expected}
-        failed = self.step_run_repo.failed_shard_keys(
-            job_id, run_id, SINGLE_AUDIO_CHUNK_STEP,
-        )
-        if expected_set & failed:
-            return False
-
-        succeeded = self.step_run_repo.succeeded_shard_keys(
-            job_id, run_id, SINGLE_AUDIO_CHUNK_STEP,
-        )
-        # Race fix: Firestore `where("state", "==", "succeeded")` queries are
-        # eventually consistent — the index lags the document write by
-        # ~50–500 ms. When the LAST chunk's on_step_success fires immediately
-        # after mark_succeeded for that same shard, the query may return
-        # only N-1 of N succeeded chunks. Without compensating, the fan-out
-        # silently drops because issubset() returns False, and since this
-        # was the last completion there's no future trigger to retry.
-        # We KNOW the just-succeeded shard is succeeded (we're being called
-        # in its on_step_success hook), so union it in.
-        if just_succeeded_shard:
-            succeeded = succeeded | {just_succeeded_shard}
-        if not expected_set.issubset(succeeded):
-            return False
-
-        # Verify each chunk's WAV is actually on disk. A "succeeded" synth
-        # step_run is necessary but not sufficient — see docstring.
-        chunks_needing_resynth: list[int] = []
-        for chunk_index, _shard in expected:
-            wav_path = single_chunk_wav_path(run_id, chunk_index)
-            if not wav_path.is_file():
-                chunks_needing_resynth.append(chunk_index)
-
-        if chunks_needing_resynth:
-            logger.warning(
-                "qc fan-out: chunk WAVs missing on disk; re-rendering synth before QC",
-                extra={
-                    "job_id": job_id,
-                    "run_id": run_id,
-                    "chunk_indexes": chunks_needing_resynth,
-                },
-            )
-            # Reuse the FAIL-retry helper — it deletes any stale step_run docs
-            # and re-enqueues synth. The unlink call is a no-op when the WAV
-            # is already missing. After synth re-runs, this fan-out fires
-            # again and (assuming WAVs are now present) enqueues QC.
-            self._retry_qc_failed_chunks(
-                job, job_id, run_id,
-                chunk_indexes=chunks_needing_resynth,
-            )
-            return True
-
-        # All WAVs present. Fan out QC for any chunk that doesn't already
-        # have a QC step run (idempotent re-enqueue safe).
-        for chunk_index, shard in expected:
-            if self.step_run_repo.state(run_id, SINGLE_AUDIO_QC_STEP, shard):
-                continue
-            self._ensure_step_enqueued(
-                job, job_id, run_id,
-                SINGLE_AUDIO_QC_STEP,
-                shard_key=shard,
-                step_input={"chunk_index": chunk_index},
-            )
-        return True
-
-    def _evaluate_single_audio_qc(
-        self, job: dict, job_id: str, run_id: str,
-    ) -> None:
-        """Decide what to do once QC verdicts are in for all chunks.
-
-        Outcomes (in priority order):
-          1. Any chunk still pending QC → wait.
-          2. Any FAIL with attempts < 3 → delete WAV + re-enqueue synth for those
-             chunks. We retry first even when REVIEW chunks exist, because
-             retrying a real TTS error is cheap and may resolve it; parking
-             prematurely strands fixable problems behind unrelated REVIEWs.
-          3. Any REVIEW or any FAIL with attempts ≥ 3 → park run for human.
-          4. All PASS → enqueue ``assemble_audio``.
-        """
-        expected = list(enumerate(self._single_audio_chunk_shards(job)))
-        if not expected:
-            return
-        expected_set = {shard for _, shard in expected}
-
-        # Refetch job to get the latest chunk_qc state written by the QC step.
-        fresh_job = self.job_repo.get(job_id)
-        runtime = fresh_job.get("runtime") or {}
-        chunk_qc_map: dict = runtime.get("chunk_qc") or {}
-
-        succeeded = self.step_run_repo.succeeded_shard_keys(
-            job_id, run_id, SINGLE_AUDIO_QC_STEP,
-        )
-        if not expected_set.issubset(succeeded):
-            # Still waiting on at least one QC verdict.
-            return
-
-        # Bucket each chunk by verdict.
-        passes: list[int] = []
-        reviews: list[int] = []
-        fails_retryable: list[int] = []
-        fails_exhausted: list[int] = []
-
-        for chunk_index, _shard in expected:
-            entry = chunk_qc_map.get(str(chunk_index)) or {}
-            verdict = str(entry.get("verdict") or "").upper()
-            attempts = int(entry.get("attempts") or 0)
-            if verdict == "PASS":
-                passes.append(chunk_index)
-            elif verdict == "REVIEW":
-                reviews.append(chunk_index)
-            elif verdict == "FAIL":
-                if attempts < SINGLE_AUDIO_QC_MAX_ATTEMPTS:
-                    fails_retryable.append(chunk_index)
-                else:
-                    fails_exhausted.append(chunk_index)
-            else:
-                # Verdict missing or unknown — treat as still-pending and wait.
-                return
-
-        # Decision tree. Retry retryable FAILs first — that gives real TTS
-        # errors a chance to resolve before we park. Only park when there's
-        # nothing left to auto-fix (REVIEW needs human; exhausted FAIL means
-        # retries didn't help).
-        if fails_retryable:
-            self._retry_qc_failed_chunks(
-                fresh_job, job_id, run_id,
-                chunk_indexes=fails_retryable,
-            )
-            return
-
-        if reviews or fails_exhausted:
-            self._park_run_for_qc_review(
-                fresh_job, job_id, run_id,
-                reviews=reviews,
-                fails_exhausted=fails_exhausted,
-            )
-            return
-
-        # All passes — enqueue assembly.
-        self._ensure_step_enqueued(fresh_job, job_id, run_id, SINGLE_AUDIO_ASSEMBLE_STEP)
-
-    def _retry_qc_failed_chunks(
-        self,
-        job: dict,
-        job_id: str,
-        run_id: str,
-        *,
-        chunk_indexes: list[int],
-    ) -> None:
-        """Delete each chunk's WAV, clear its synth+QC step-runs, and re-enqueue synth.
-
-        Sequence (per failing chunk):
-          1. Delete the chunk WAV file so synth's idempotency check
-             actually re-renders TTS (it skips when the WAV exists).
-          2. Delete the synth and QC step-run documents so
-             ``_maybe_fan_out_single_audio_qc`` sees them as missing
-             after synth re-runs and re-enqueues QC normally.
-          3. Re-enqueue synth. After it succeeds, the regular fan-out
-             hook will enqueue a fresh QC for that chunk.
-
-        Attempt count is preserved in ``runtime.chunk_qc[i].attempts``
-        and read by the QC executor on its next run.
-        """
-        from factory_v2.shared.course_tts_chunks import (
-            make_single_chunk_shard_key,
-            single_chunk_wav_path,
-        )
-
-        for chunk_index in chunk_indexes:
-            shard = make_single_chunk_shard_key(chunk_index)
-
-            # 1. Delete chunk WAV.
-            wav_path = single_chunk_wav_path(run_id, chunk_index)
-            try:
-                wav_path.unlink()
-            except FileNotFoundError:
-                pass
-            except Exception as exc:
-                logger.warning(
-                    "qc retry: failed to delete chunk WAV",
-                    extra={
-                        "job_id": job_id,
-                        "run_id": run_id,
-                        "chunk_index": chunk_index,
-                        "wav_path": str(wav_path),
-                        "error": str(exc),
-                    },
-                )
-
-            # 2. Delete the synth and QC step-run docs so the fan-out helper
-            # treats them as missing on the next pass and re-enqueues cleanly.
-            if hasattr(self.step_run_repo, "delete"):
-                synth_run_id = self.step_run_repo.make_step_run_id(
-                    run_id, SINGLE_AUDIO_CHUNK_STEP, shard,
-                )
-                qc_run_id = self.step_run_repo.make_step_run_id(
-                    run_id, SINGLE_AUDIO_QC_STEP, shard,
-                )
-                self.step_run_repo.delete(synth_run_id)
-                self.step_run_repo.delete(qc_run_id)
-
-            # 3. Re-enqueue synth. QC is re-enqueued by the synth-success
-            # hook (_maybe_fan_out_single_audio_qc) once synth completes.
-            self._ensure_step_enqueued(
-                job, job_id, run_id,
-                SINGLE_AUDIO_CHUNK_STEP,
-                shard_key=shard,
-                step_input={"chunk_index": chunk_index},
-            )
-
-        logger.info(
-            "qc retry: re-enqueued synth for failing chunks",
-            extra={
-                "job_id": job_id,
-                "run_id": run_id,
-                "chunk_indexes": chunk_indexes,
-            },
-        )
-
-    def _park_run_for_qc_review(
-        self,
-        job: dict,
-        job_id: str,
-        run_id: str,
-        *,
-        reviews: list[int],
-        fails_exhausted: list[int],
-    ) -> None:
-        """Stop advancing the run and flag it for human review.
-
-        Writes ``runtime.qc_park`` and a summary patch so admin tooling
-        can find the parked run, present the per-chunk verdicts, and
-        decide whether to override-and-assemble, re-render manually,
-        or reject the run.
-
-        The run stays in 'running' state — admin tooling later resumes
-        it (Phase 3) by either enqueueing ``assemble_audio`` directly or
-        re-enqueueing synth for selected chunks.
-        """
-        park_reason = []
-        if reviews:
-            park_reason.append(f"{len(reviews)} chunk(s) need REVIEW: {reviews}")
-        if fails_exhausted:
-            park_reason.append(
-                f"{len(fails_exhausted)} chunk(s) exhausted retries: {fails_exhausted}"
-            )
-        reason_text = "; ".join(park_reason) or "QC parked"
-
-        if hasattr(self.job_repo, "patch_runtime"):
-            self.job_repo.patch_runtime(
-                job_id,
-                {
-                    "qc_park": {
-                        "parked_at": fs.SERVER_TIMESTAMP,
-                        "reason": reason_text,
-                        "review_chunks": reviews,
-                        "exhausted_chunks": fails_exhausted,
-                        "run_id": run_id,
-                    }
-                },
-            )
-            self.job_repo.patch_summary(
-                job_id,
-                {
-                    "currentStep": SINGLE_AUDIO_QC_STEP,
-                    "qcParked": True,
-                    "qcParkReason": reason_text,
-                },
-            )
-
-        logger.warning(
-            "qc parked run for review",
-            extra={
-                "job_id": job_id,
-                "run_id": run_id,
-                "reviews": reviews,
-                "exhausted": fails_exhausted,
-            },
-        )
 
     def recover_single_audio_fan_out_if_ready(self, job_id: str, run_id: str) -> int:
         """Heal single-content runs where format_script succeeded but chunk
@@ -1696,25 +1363,9 @@ class Orchestrator:
                 return
 
             if step_name == SINGLE_AUDIO_CHUNK_STEP:
-                # A chunk finished. With QC enabled, route through QC fan-out
-                # before assembly. Without QC, go straight to assembly. Pass
-                # the just-completed shard down so the fan-in helper can
-                # close the Firestore eventual-consistency race when this is
-                # the LAST chunk.
-                if _qc_enabled():
-                    self._maybe_fan_out_single_audio_qc(
-                        job, job_id, run_id, just_succeeded_shard=shard_key,
-                    )
-                else:
-                    self._maybe_enqueue_single_audio_assembly(
-                        job, job_id, run_id, just_succeeded_shard=shard_key,
-                    )
-                return
-
-            if step_name == SINGLE_AUDIO_QC_STEP:
-                # A QC verdict landed. When all chunk verdicts are in,
-                # decide: assemble, retry failing chunks, or park.
-                self._evaluate_single_audio_qc(job, job_id, run_id)
+                # A chunk finished -- check if all chunks are done so we
+                # can assemble them into one audio file.
+                self._maybe_enqueue_single_audio_assembly(job, job_id, run_id)
                 return
 
             if step_name == SINGLE_AUDIO_ASSEMBLE_STEP:

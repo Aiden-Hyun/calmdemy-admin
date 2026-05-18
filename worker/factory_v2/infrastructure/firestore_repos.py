@@ -551,62 +551,6 @@ class FirestoreStepRunRepo:
             merge=True,
         )
 
-    def batch_mark_succeeded_from_checkpoint(
-        self,
-        entries: list[tuple[str, str, str, str, dict]],
-    ) -> None:
-        """Atomically write many step-run docs as 'succeeded from checkpoint' in batches.
-
-        Each ``entries`` tuple is ``(job_id, run_id, step_name, shard_key, output)``.
-
-        Replaces the serial pattern of ``ensure_ready`` + ``mark_succeeded_from_checkpoint``
-        across N steps — which is two Firestore round-trips per step. For a
-        retry of a single-content job that's already done most of the work,
-        the orchestrator's checkpoint seed would write ~30 docs serially
-        (script + format + image + 7×synth chunk + 7×qc chunk = 17 steps ×
-        2 writes), accumulating 3-10 seconds of network round-trip latency
-        before the next-unfinished step even gets enqueued.
-
-        This method commits up to ``BATCH_LIMIT`` docs per round-trip via
-        Firestore's ``WriteBatch`` — collapsing the same 30-write workload
-        into 1 round-trip.
-
-        Unlike ``ensure_ready`` (which uses ``create`` and fails on
-        AlreadyExists), this method uses ``set`` with ``merge=True``. A
-        fresh run shouldn't have these docs yet; if it does (re-seed during
-        a manual replay), the merge preserves any sibling fields.
-        """
-        if not entries:
-            return
-        BATCH_LIMIT = 500
-        col = self.db.collection("factory_step_runs")
-        for offset in range(0, len(entries), BATCH_LIMIT):
-            chunk = entries[offset:offset + BATCH_LIMIT]
-            batch = self.db.batch()
-            for job_id, run_id, step_name, shard_key, output in chunk:
-                step_run_id = self.make_step_run_id(run_id, step_name, shard_key)
-                batch.set(
-                    col.document(step_run_id),
-                    {
-                        "job_id": job_id,
-                        "run_id": run_id,
-                        "step_name": step_name,
-                        "shard_key": shard_key,
-                        "state": "succeeded",
-                        "output": output,
-                        "worker_id": "checkpoint",
-                        "attempt": 1,
-                        "created_at": fs.SERVER_TIMESTAMP,
-                        "started_at": fs.SERVER_TIMESTAMP,
-                        "last_heartbeat_at": fs.SERVER_TIMESTAMP,
-                        "watchdog_state": "succeeded",
-                        "ended_at": fs.SERVER_TIMESTAMP,
-                        "updated_at": fs.SERVER_TIMESTAMP,
-                    },
-                    merge=True,
-                )
-            batch.commit()
-
     def mark_failed(self, step_run_id: str, error_code: str, error_message: str) -> None:
         """Terminal failure -- no automatic retry will follow."""
         self.db.collection("factory_step_runs").document(step_run_id).set(
@@ -620,17 +564,6 @@ class FirestoreStepRunRepo:
             },
             merge=True,
         )
-
-    def delete(self, step_run_id: str) -> None:
-        """Delete a step-run document so the orchestrator can re-create it.
-
-        Used by the QC retry path: when a chunk's QC verdict is FAIL and we
-        want to re-render synth, we delete both the synth and QC step-runs
-        for that shard so the fan-out helpers see them as missing and
-        re-enqueue from scratch. The new ``ensure_ready`` call recreates
-        the doc with state='ready' and attempt=1.
-        """
-        self.db.collection("factory_step_runs").document(step_run_id).delete()
 
     def mark_retry_scheduled(
         self,
